@@ -52,18 +52,6 @@ def test_openai_compat_validates_constructor() -> None:
         OpenAICompatProvider(base_url="http://x", api_key="k", model="")
 
 
-def test_anthropic_cli_stub_raises_not_implemented() -> None:
-    p = AnthropicViaClaudeCLI()
-    with pytest.raises(NotImplementedError, match=r"P1\.1\.c"):
-        asyncio.run(
-            p.complete(
-                messages=(Message(role=Role.USER, content="hi"),),
-                schema=_Out,
-                max_output_tokens=64,
-            ),
-        )
-
-
 def test_codex_cli_stub_raises_not_implemented() -> None:
     p = OpenAIViaCodexCLI()
     with pytest.raises(NotImplementedError, match=r"P1\.1\.c"):
@@ -76,9 +64,11 @@ def test_codex_cli_stub_raises_not_implemented() -> None:
         )
 
 
+# AnthropicViaClaudeCLI is fully implemented as of P1.1.c.1; its behaviour
+# (HTTP transport, OAuth-vs-API-key auth, tool-use parsing, error mapping)
+# is covered by tests/test_anthropic_cli.py.
 # OpenAICompatProvider is fully implemented as of P1.1.5; its behaviour
-# (HTTP transport, tool-call parsing, error mapping) is covered by
-# tests/test_openai_compat.py.
+# is covered by tests/test_openai_compat.py.
 
 
 # === is_configured() ===
