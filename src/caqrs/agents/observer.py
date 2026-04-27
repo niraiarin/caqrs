@@ -18,7 +18,8 @@ sentiment into ``regime_summary`` / ``macro_notes``.
 """
 
 from caqrs.agents.base_llm_agent import LLMAgent
-from caqrs.schemas.observer import ObserverArtifact, ObserverInput, PolymarketSignal
+from caqrs.agents.prompts import format_polymarket_block
+from caqrs.schemas.observer import ObserverArtifact, ObserverInput
 
 
 class ObserverAgent(LLMAgent[ObserverInput, ObserverArtifact]):
@@ -43,33 +44,5 @@ class ObserverAgent(LLMAgent[ObserverInput, ObserverArtifact]):
 
     def build_user_message(self, payload: ObserverInput) -> str:
         base = payload.model_dump_json(indent=2)
-        if not payload.polymarket_signals:
-            return base
-        return f"{base}\n\n{_format_polymarket_block(payload.polymarket_signals)}"
-
-
-def _format_polymarket_block(signals: tuple[PolymarketSignal, ...]) -> str:
-    """Render Polymarket signals as a compact, model-friendly block.
-
-    The structured JSON dump above already contains every field; this
-    block flags the Polymarket section explicitly so the LLM does not
-    treat the signals as stray prose, and pre-computes the
-    "probability of YES" view for binary markets where it is the
-    natural single-number framing.
-    """
-    lines: list[str] = ["Polymarket implied probabilities (live snapshot):"]
-    for sig in signals:
-        slug = sig.slug or sig.market_id
-        question = sig.question or "(no question)"
-        if sig.is_binary:
-            yes = next((o for o in sig.outcomes if o.label.casefold() == "yes"), None)
-            if yes is not None and yes.midpoint is not None:
-                lines.append(f"- {slug}: P(Yes)={yes.midpoint:.2f} — {question}")
-                continue
-        # Multi-outcome or no-yes-midpoint: list each outcome
-        parts = [
-            f"{o.label}={o.midpoint:.2f}" if o.midpoint is not None else f"{o.label}=?"
-            for o in sig.outcomes
-        ]
-        lines.append(f"- {slug}: " + ", ".join(parts) + f" — {question}")
-    return "\n".join(lines)
+        block = format_polymarket_block(payload.polymarket_signals)
+        return f"{base}\n\n{block}" if block else base
