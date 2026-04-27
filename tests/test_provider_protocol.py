@@ -1,6 +1,5 @@
 """Provider protocol shape and stub behaviour tests."""
 
-import asyncio
 import json
 from pathlib import Path
 
@@ -10,10 +9,8 @@ from pydantic import BaseModel
 from caqrs.providers import (
     AnthropicViaClaudeCLI,
     LLMProvider,
-    Message,
     OpenAICompatProvider,
     OpenAIViaCodexCLI,
-    Role,
 )
 
 
@@ -52,23 +49,11 @@ def test_openai_compat_validates_constructor() -> None:
         OpenAICompatProvider(base_url="http://x", api_key="k", model="")
 
 
-def test_codex_cli_stub_raises_not_implemented() -> None:
-    p = OpenAIViaCodexCLI()
-    with pytest.raises(NotImplementedError, match=r"P1\.1\.c"):
-        asyncio.run(
-            p.complete(
-                messages=(Message(role=Role.USER, content="hi"),),
-                schema=_Out,
-                max_output_tokens=64,
-            ),
-        )
-
-
-# AnthropicViaClaudeCLI is fully implemented as of P1.1.c.1; its behaviour
-# (HTTP transport, OAuth-vs-API-key auth, tool-use parsing, error mapping)
-# is covered by tests/test_anthropic_cli.py.
-# OpenAICompatProvider is fully implemented as of P1.1.5; its behaviour
-# is covered by tests/test_openai_compat.py.
+# All three concrete providers are now fully implemented:
+# - AnthropicViaClaudeCLI (P1.1.c.1) — tests/test_anthropic_cli.py
+# - OpenAIViaCodexCLI (P1.1.c.2) — tests/test_codex_cli.py
+# - OpenAICompatProvider (P1.1.5) — tests/test_openai_compat.py
+# Protocol-shape tests live above; behavioural tests live in those files.
 
 
 # === is_configured() ===
