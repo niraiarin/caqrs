@@ -1,6 +1,8 @@
 """Provider protocol shape and stub behaviour tests."""
 
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
@@ -52,7 +54,7 @@ def test_openai_compat_validates_constructor() -> None:
 
 def test_anthropic_cli_stub_raises_not_implemented() -> None:
     p = AnthropicViaClaudeCLI()
-    with pytest.raises(NotImplementedError, match=r"P1\.1"):
+    with pytest.raises(NotImplementedError, match=r"P1\.1\.c"):
         asyncio.run(
             p.complete(
                 messages=(Message(role=Role.USER, content="hi"),),
@@ -64,7 +66,7 @@ def test_anthropic_cli_stub_raises_not_implemented() -> None:
 
 def test_codex_cli_stub_raises_not_implemented() -> None:
     p = OpenAIViaCodexCLI()
-    with pytest.raises(NotImplementedError, match=r"P1\.1"):
+    with pytest.raises(NotImplementedError, match=r"P1\.1\.c"):
         asyncio.run(
             p.complete(
                 messages=(Message(role=Role.USER, content="hi"),),
@@ -84,3 +86,49 @@ def test_openai_compat_stub_raises_not_implemented() -> None:
                 max_output_tokens=64,
             ),
         )
+
+
+# === is_configured() ===
+
+
+def test_anthropic_is_configured_false_with_no_creds(tmp_path: Path) -> None:
+    """The autouse Keychain-disable fixture means an empty home returns no creds."""
+    p = AnthropicViaClaudeCLI(home_dir=tmp_path)
+    assert p.is_configured() is False
+
+
+def test_anthropic_is_configured_true_with_file_creds(tmp_path: Path) -> None:
+    creds_dir = tmp_path / ".claude"
+    creds_dir.mkdir()
+    (creds_dir / ".credentials.json").write_text(
+        json.dumps(
+            {
+                "claudeAiOauth": {
+                    "accessToken": "a",
+                    "refreshToken": "r",
+                    "expiresAt": 1_900_000_000_000,
+                },
+            },
+        ),
+        encoding="utf-8",
+    )
+    p = AnthropicViaClaudeCLI(home_dir=tmp_path)
+    assert p.is_configured() is True
+
+
+def test_codex_is_configured_false_with_no_creds(tmp_path: Path) -> None:
+    p = OpenAIViaCodexCLI(codex_home=tmp_path / ".codex")
+    assert p.is_configured() is False
+
+
+def test_codex_is_configured_true_with_file_creds(tmp_path: Path) -> None:
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    (codex_home / "auth.json").write_text(
+        json.dumps(
+            {"tokens": {"access_token": "a", "refresh_token": "r"}},
+        ),
+        encoding="utf-8",
+    )
+    p = OpenAIViaCodexCLI(codex_home=codex_home)
+    assert p.is_configured() is True
