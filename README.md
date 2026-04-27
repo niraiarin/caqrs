@@ -8,11 +8,11 @@ agents not as profit-seekers but as **autonomous research systems under bounded 
 constraints**. The core loop is:
 
 ```
-Observe → Hypothesize → Skeptic → Research → Audit → Decide → (Policy Gateway) → Memory
+Observe → Hypothesize → Skeptic → Research → (Backtest) → Audit → Decide → (Policy Gateway) → Memory
 ```
 
-P0 closes the *research* loop only — execution is suppressed at the `StrategyDecision`
-boundary. Broker adapters arrive in P3 behind explicit human-approval workflow.
+P0–P1 close the *research* loop only — execution is suppressed at the `StrategyDecision`
+boundary. Broker adapters arrive in P3 behind an explicit human-approval workflow.
 
 ## Why a separate repo?
 
@@ -37,7 +37,7 @@ Requires Python ≥ 3.12 and [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync                       # install deps (creates .venv/)
-uv run pytest                 # run tests
+uv run pytest                 # run tests (live tests skipped without CAQRS_LIVE=1)
 uv run ruff check .           # lint
 uv run ruff format --check .  # format check
 uv run mypy src tests         # strict type-check
@@ -52,26 +52,80 @@ just typecheck
 just ci          # run everything CI runs
 ```
 
+### Try a live data source
+
+Polymarket implied probabilities are exposed via a public read-only API; no key required.
+The standalone smoke script discovers an active high-liquidity market and prints a
+typed snapshot:
+
+```bash
+uv run python scripts/live_smoke_polymarket.py
+# or pin to a specific market:
+uv run python scripts/live_smoke_polymarket.py --slug fed-cuts-2026
+```
+
+For the full LLM pipeline against a LiteLLM gateway, see `scripts/live_smoke_observer.py`.
+
 ## Project layout
 
 ```
 src/caqrs/
-├── schemas/         # pydantic artifact schemas (frozen, extra=forbid, mypy strict)
-├── agents/          # Agent protocol; concrete agents land here in P1
-└── py.typed         # PEP 561 marker
-tests/               # pytest + hypothesis property-based tests
-docs/                # ARCHITECTURE.md, lineage.md, decisions/ (ADRs)
+├── schemas/        # frozen, extra=forbid, mypy-strict pydantic artifacts
+│                   # observer, hypothesis_card, skeptic, research_plan,
+│                   # backtest_report, audit, decision, common
+├── agents/         # Agent[I, O] protocol + LLMAgent base + 6 concrete agents
+│                   # observer, hypothesis, skeptic, research, auditor, decider
+│                   # plus prompts/ (guardrails, role template, polymarket block)
+├── orchestrator/   # state machine, loop detector, preflight scanners,
+│                   # event log, cycle budget, cycle runner, cycle queue
+├── memory/         # episodic CycleStore (per-cycle archive + rolling index)
+├── providers/      # Anthropic CLI, Codex CLI, OpenAI-compatible, registry,
+│                   # subscription credential loaders (OpenClaw-derived)
+├── data/           # external read-only data sources for the Observer
+│                   # polymarket/ (CLOB + Gamma clients + Observer signal helper)
+└── py.typed        # PEP 561 marker
+
+tests/              # pytest + hypothesis; respx-mocked HTTP; live/ gated by CAQRS_LIVE=1
+docs/               # ARCHITECTURE.md, lineage.md, decisions/ (ADRs),
+                    # research/mercury-survey/ (44 named patterns)
+scripts/            # standalone runnables (live smoke, manual integration checks)
 ```
+
+## How a cycle runs
+
+1. Caller builds an `ObserverInput` (universe, horizon, requested data dimensions,
+   optional `polymarket_signals` pre-fetched via `caqrs.data.polymarket.fetch_polymarket_signal`).
+2. `CycleRunner` drives the typed pipeline: Observer → Hypothesis → Skeptic. If the skeptic
+   verdict is `PROCEED`, Research generates a walk-forward plan, the injected
+   `BacktestExecutor` runs it (P2 plumbs in vectorbt; P1 takes a stub), and the Auditor
+   checks the report against the hypothesis's acceptance criteria.
+3. On `audit.verdict == PASS` the Decider emits a typed `StrategyDecision` with policy
+   envelopes (`notional_cap_usd`, `max_position_weight`, `daily_loss_limit_usd`).
+4. Per-step events flow into an `EventLog`; a `BudgetGuard` enforces token + wallclock caps;
+   on agent failure or budget breach the runner emits `CYCLE_ABORTED` and transitions to
+   `ERROR`.
+5. If a `CycleStore` is wired in, the result and per-cycle events are persisted under
+   `cycles/<id>/{result.json,events.jsonl}` with a one-line summary appended to
+   `index.jsonl`.
+
+A `CycleQueue` provides a serial dispatcher with reentrancy guard so concurrent enqueues
+are safe but cycles execute one at a time.
 
 ## Roadmap
 
-| Phase | Scope                                                       | Status |
-| ----- | ----------------------------------------------------------- | ------ |
-| P0    | Artifact schemas + Agent protocol + CI                      | ✅     |
-| P1    | Observer + Hypothesis + Skeptic + Auditor (closed loop)     | —      |
-| P2    | Research Agent + walk-forward backtest (vectorbt)           | —      |
-| P3    | Policy Gateway + paper broker                               | —      |
-| P4    | Live broker adapter (optional, gated by human approval)     | —      |
+| Phase     | Scope                                                          | Status        |
+| --------- | -------------------------------------------------------------- | ------------- |
+| P0        | Artifact schemas + Agent protocol + CI                         | ✅            |
+| P1.1      | Provider stack (Anthropic / Codex / OpenAI-compat / registry)  | ✅            |
+| P1.2      | Six concrete agents on `LLMAgent` base                         | ✅            |
+| P1.3      | Memory: per-cycle archive + auto-persist via runner            | ✅ a + b      |
+| P1.4      | Orchestrator (events, budget, runner, queue)                   | ✅ a + b + c + d-mini |
+| P1.5      | Live LLM smoke test (Observer)                                 | ✅            |
+| P1.6      | Polymarket data source + Observer / Hypothesis integration     | ✅            |
+| P1.7      | README refresh (this PR)                                       | ✅            |
+| P2        | Walk-forward backtest engine (vectorbt) replacing the stub     | —             |
+| P3        | Policy Gateway + paper broker + asset/loss-limit projections   | —             |
+| P4        | Live broker adapter (gated by human approval)                  | —             |
 
 ## License
 
