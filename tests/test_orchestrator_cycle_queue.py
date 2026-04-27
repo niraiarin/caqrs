@@ -117,7 +117,7 @@ class _StubAgent[O: BaseModel]:
         self.name = name
         self._result = result
 
-    async def run(self, payload: object, /) -> AgentResult[O]:  # noqa: ARG002
+    async def run(self, _payload: object, /) -> AgentResult[O]:
         return self._result
 
 
