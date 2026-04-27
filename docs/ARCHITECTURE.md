@@ -3,55 +3,75 @@
 ## Overview
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│ Orchestrator (state machine, asyncio)                      │
-└──────┬─────────────────────────────────────────────────────┘
-       │ pydantic-typed messages
-       ▼
-┌─────────────┬─────────────┬─────────────┬─────────────┐
-│ Observer    │ Hypothesis  │ Skeptic     │ Research    │
-│ (data)      │ (LLM)       │ (LLM)       │ (backtest)  │
-└─────────────┴─────────────┴─────────────┴─────────────┘
-       │                                         │
-       ▼                                         ▼
-┌────────────────────┐               ┌────────────────────┐
-│ Memory             │               │ Artifact Store     │
-│ (SQLite + FTS5)    │               │ (Parquet + JSON)   │
-└────────────────────┘               └─────────┬──────────┘
-                                                │
-                                                ▼
-                                     ┌─────────────────────┐
-                                     │ Policy Gateway (Π)  │
-                                     │ (P3)                │
-                                     └─────────────────────┘
-                                                │
-                                                ▼
-                                     ┌─────────────────────┐
-                                     │ Paper / Live Broker │
-                                     │ (P3 / P4)           │
-                                     └─────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Heartbeat / external trigger                                            │
+└──────────┬──────────────────────────────────────────────────────────────┘
+           │  ObserverInput (universe + horizon + optional polymarket signals)
+           ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ CycleQueue (FIFO, serial dispatch, reentrancy guard)                    │
+└──────────┬──────────────────────────────────────────────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ CycleRunner — typed pipeline driver                                     │
+│                                                                         │
+│  Observer ─► Hypothesis ─► Skeptic ─► Research ─► [Backtest] ─►        │
+│              Auditor ─► Decider                                         │
+│                                                                         │
+│  side rails: OrchestratorStateMachine | EventLog | BudgetGuard          │
+└──────────┬───────────────────────────────────────────────────┬──────────┘
+           │ CycleResult + per-cycle events                     │ data
+           ▼                                                    │ (Observer)
+┌──────────────────────────┐                              ┌─────▼────────┐
+│ CycleStore               │                              │ caqrs.data.  │
+│ cycles/<id>/result.json  │                              │ polymarket   │
+│ cycles/<id>/events.jsonl │                              │ (CLOB+Gamma) │
+│ index.jsonl              │                              └──────────────┘
+└────────────┬─────────────┘
+             │ StrategyDecision
+             ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Policy Gateway Π : Action → FeasibleAction (P3)                         │
+└──────────┬──────────────────────────────────────────────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Paper / Live Broker (P3 / P4, gated by human approval)                  │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## State machine (orchestrator)
+## Orchestrator state machine
+
+States represent research-cycle phases (not agent lifecycle). Whitelist transitions
+enforced at runtime in `caqrs.orchestrator.state_machine`:
 
 ```
-unborn → bootstrapping → idle ⇄ running → reporting → idle
-                                  ↓
-                                error → idle (with episode logged)
+idle → observing → hypothesizing → scrutinizing →┐
+                                                 ├─► researching → auditing →┐
+                                                 │                            ├─► deciding → idle
+                                                 │   (verdict=PASS only)      │
+                                                 │                            └─► idle (verdict=FAIL)
+                                                 └─► idle (skeptic non-PROCEED)
+                                       (skeptic kill / require_revision)
+
+* → error → idle    (any agent failure / budget breach)
 ```
 
-Implementation lands in P1.
+Listener fan-out emits a `STATE_TRANSITION` event into the `EventLog` on every
+successful transition.
 
 ## Agent contract
 
-All agents implement `caqrs.agents.protocol.Agent[I, O]`. `I` and `O` are
-pydantic `BaseModel` subclasses. Concrete agents register with the orchestrator
-at startup and receive typed inputs only — they do not see other agents'
-raw outputs except through `RunMetadata.parent_id` chains.
+All agents implement `caqrs.agents.protocol.Agent[I, O]`. `I` and `O` are pydantic
+`BaseModel` subclasses, frozen and `extra="forbid"`. Concrete agents (Observer,
+Hypothesis, Skeptic, Research, Auditor, Decider) inherit from `LLMAgent[I, O]`
+and receive typed inputs only — they do not see other agents' raw outputs except
+through `RunMetadata.parent_id` chains.
 
-Agents are async pure functions of their input plus side-channel resources
-(LLM client, data store handles). Mutable shared state is forbidden inside
-agent bodies; lineage is the only cross-agent communication channel.
+Agents are async pure functions of their input plus side-channel resources (LLM
+provider, data store handles). Mutable shared state is forbidden inside agent
+bodies; lineage is the only cross-agent communication channel.
 
 ## Artifact lineage
 
@@ -67,12 +87,49 @@ instrumentation exercise.
 
 ## Walk-forward as a schema-level invariant
 
-`ResearchPlan.walk_forward` enforces train/test ordering and disjointness at
-the schema validator level. In-sample-only configurations cannot be
-constructed because every walk-forward window requires
+`ResearchPlan.walk_forward` enforces train/test ordering and disjointness at the
+schema validator level. In-sample-only configurations cannot be constructed
+because every walk-forward window requires
 `train_start < train_end <= test_start < test_end`. Cross-window test-set
-overlap is also rejected. This pushes leakage prevention from "remember to
-test" into "cannot compile".
+overlap is also rejected. This pushes leakage prevention from "remember to test"
+into "cannot compile".
+
+## Cycle runtime: events, budget, persistence
+
+- **`EventLog`** is an append-only stream of `CycleEvent` records. Listener
+  callbacks fan out on every append; an optional `persist_to: Path` arg writes
+  JSONL to disk in lock-step.
+- **`BudgetGuard`** wraps a `CycleBudget` (token + wallclock cap). Callers feed
+  agent token usage in via `consume(token_in=, token_out=)`; the guard emits a
+  `BUDGET_EXCEEDED` event into the log on the *first* breach (further breaches
+  stay silent) and the runner aborts the cycle.
+- **`CycleStore`** (in `caqrs.memory`) persists each cycle's `CycleResult` plus
+  its events to disk under `cycles/<id>/`, with a one-line summary appended to
+  a rolling `index.jsonl`. `prune_older_than(cutoff)` keeps the archive bounded.
+- **`CycleRunner`** integrates the above with the six agents, handling state
+  transitions, agent invocation, error / budget propagation, and (optionally)
+  auto-persist via the structural `CycleStoreProtocol`.
+- **`CycleQueue`** is a serial dispatcher with a reentrancy guard so multiple
+  callers can enqueue safely while cycles run one at a time.
+- **`Heartbeat`** is a pure interval-based fire tracker: caller polls
+  `is_due()` and calls `fire()` after enqueuing. Composes with `CycleQueue` in
+  the caller's event loop.
+
+## External data (Observer)
+
+`caqrs.data` hosts read-only adapters that the Observer composes from. Each
+sub-package wraps a single source:
+
+- `caqrs.data.polymarket` — implied probabilities from prediction markets via
+  the public CLOB + Gamma APIs (no auth). The helper
+  `fetch_polymarket_signal(gamma_client=, clob_client=, identifier=)` resolves
+  a market by id or slug, fetches per-token midpoint / spread / last-trade,
+  and returns a `PolymarketSignal` ready to drop onto an `ObserverInput`.
+
+Future data sources (price feeds, news, macro) will follow the same shape:
+async client per source, typed artifact, helper that composes raw responses
+into the Observer-facing snapshot. CAQRS does not bundle a single opinionated
+data layer because financial-research signals come from many uncorrelated APIs.
 
 ## Policy Gateway position (P3)
 
@@ -80,13 +137,19 @@ The gateway is **not** a wrapper over a broker SDK. It is a projection
 `Π : Action → FeasibleAction` applied to `StrategyDecision` artifacts before
 any broker adapter is reachable. Decisions that violate the projection are
 not "fixed" in place; they are emitted with `action=defer` and a violation
-report attached. Schema enforces baseline cash-only constraints (sum of
-weights ≤ 1, per-position weight ≤ `max_position_weight`, no duplicate
-tickers) without yet binding to a broker.
+report attached. The `StrategyDecision` schema already enforces baseline
+cash-only constraints (sum of weights ≤ 1, per-position weight ≤
+`max_position_weight`, no duplicate tickers) without yet binding to a broker.
 
 ## Graceful degradation
 
 Every external dependency (LLM provider, data source, broker) returns through
 a provider abstraction with ordered fallback. A failed provider does not
 crash the orchestrator; it produces an `AgentResult` with `error` set, which
-the orchestrator routes to the episode log without halting the loop.
+the runner routes to `CYCLE_ABORTED` and the cycle's event log without
+halting the surrounding loop. A future cycle with a healthy provider succeeds
+without operator intervention.
+
+The Polymarket helper specifically degrades per-outcome: if `get_midpoint`
+fails for one token the snapshot still records the token's other available
+fields rather than aborting the whole signal.
