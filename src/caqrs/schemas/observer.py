@@ -7,6 +7,11 @@ output (``ObserverArtifact``) feeds the Hypothesis agent.
 
 ``ObserverInput`` is given by the operator or orchestrator; it has no
 ``RunMetadata`` because it is a request, not an emitted artifact.
+
+P1.6.c — Both input and artifact carry an optional
+``polymarket_signals`` tuple so prediction-market implied
+probabilities flow through the cycle alongside price/news data. The
+field defaults to ``()`` so existing payloads remain valid.
 """
 
 from datetime import datetime
@@ -17,6 +22,55 @@ from typing import Annotated, Self
 from pydantic import Field, model_validator
 
 from caqrs.schemas.common import HorizonDays, RunMetadata, StrictBaseModel, Ticker
+
+
+class PolymarketOutcome(StrictBaseModel):
+    """One outcome (token) of a Polymarket market with current pricing."""
+
+    label: str = Field(
+        min_length=1, max_length=120, description="e.g. 'Yes' / 'No' / candidate name."
+    )
+    token_id: str = Field(min_length=1, max_length=128)
+    midpoint: Annotated[Decimal, Field(ge=0, le=1)] | None = None
+    last_trade_price: Annotated[Decimal, Field(ge=0, le=1)] | None = None
+    spread: Annotated[Decimal, Field(ge=0)] | None = None
+
+
+class PolymarketSignal(StrictBaseModel):
+    """Snapshot of a Polymarket market for Observer ingestion.
+
+    The Observer's caller is responsible for fetching this; the helper
+    in ``caqrs.data.polymarket.observer_signals`` composes a
+    :class:`PolymarketGammaClient` and :class:`PolymarketClobClient`
+    into one snapshot. The Observer agent's user message includes
+    these so the LLM can fold the implied probabilities into its
+    regime summary / macro notes."""
+
+    market_id: str = Field(min_length=1, max_length=128)
+    slug: str | None = Field(default=None, max_length=200)
+    question: str | None = Field(default=None, max_length=500)
+    end_date: datetime | None = None
+    is_binary: bool
+    outcomes: tuple[PolymarketOutcome, ...] = Field(min_length=1, max_length=20)
+    fetched_at: datetime
+
+    @model_validator(mode="after")
+    def _require_tz_aware(self) -> Self:
+        if self.fetched_at.tzinfo is None:
+            raise ValueError("fetched_at must be timezone-aware.")
+        if self.end_date is not None and self.end_date.tzinfo is None:
+            raise ValueError("end_date must be timezone-aware when provided.")
+        return self
+
+    @model_validator(mode="after")
+    def _binary_flag_matches_outcome_count(self) -> Self:
+        binary_count = 2
+        if self.is_binary and len(self.outcomes) != binary_count:
+            raise ValueError(
+                f"is_binary=True requires exactly {binary_count} outcomes; "
+                f"got {len(self.outcomes)}.",
+            )
+        return self
 
 
 class DataDimension(StrEnum):
@@ -38,6 +92,7 @@ class ObserverInput(StrictBaseModel):
     as_of: datetime
     horizon_days: HorizonDays
     dimensions: tuple[DataDimension, ...] = Field(min_length=1, max_length=5)
+    polymarket_signals: tuple[PolymarketSignal, ...] = Field(default=(), max_length=20)
 
     @model_validator(mode="after")
     def _require_tz_aware(self) -> Self:
@@ -83,6 +138,7 @@ class ObserverArtifact(StrictBaseModel):
     news_themes: tuple[str, ...] = Field(default=(), max_length=20)
     macro_notes: str = Field(default="", max_length=4000)
     data_quality_notes: tuple[str, ...] = Field(default=(), max_length=20)
+    polymarket_signals: tuple[PolymarketSignal, ...] = Field(default=(), max_length=20)
 
     @model_validator(mode="after")
     def _require_tz_aware(self) -> Self:

@@ -25,6 +25,10 @@ from caqrs.data.polymarket.clob_client import (
     Side,
 )
 from caqrs.data.polymarket.gamma_client import PolymarketGammaClient
+from caqrs.data.polymarket.observer_signals import (
+    fetch_polymarket_signal,
+    fetch_polymarket_signals,
+)
 from caqrs.data.polymarket.schemas import (
     GammaMarket,
     Orderbook,
@@ -44,4 +48,6 @@ __all__ = [
     "PriceHistoryInterval",
     "PricePoint",
     "Side",
+    "fetch_polymarket_signal",
+    "fetch_polymarket_signals",
 ]
