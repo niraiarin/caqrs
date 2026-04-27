@@ -52,6 +52,28 @@ just typecheck
 just ci          # run everything CI runs
 ```
 
+### Configuring API keys
+
+Live tests and the standalone smoke scripts read secrets from the environment.
+Copy `env.example` to `.env` (the latter is gitignored) and fill in real values:
+
+```bash
+cp env.example .env
+$EDITOR .env
+```
+
+To auto-load `.env` on every command, use [dotenvx](https://dotenvx.com):
+
+```bash
+dotenvx run -- uv run pytest tests/live/ -v
+dotenvx run -- uv run python scripts/live_smoke_jquants.py
+```
+
+`env.example` lists every variable the project reads (`CAQRS_LIVE`,
+`CAQRS_LITELLM_*`, `JQUANTS_API_KEY`, `HYPOTHESIS_PROFILE`) with one-line
+descriptions. Polymarket's CLOB / Gamma / archive endpoints are public and
+need no key.
+
 ### Try a live data source
 
 Polymarket implied probabilities are exposed via a public read-only API; no key required.
