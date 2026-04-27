@@ -9,8 +9,17 @@ the pre-LLM half of the dual-loop discipline.
 
 P1.4.a — event types + append-only ``EventLog`` for cycle observability.
 Foundation for the subsequent budget / queue / cycle-runner slices.
+
+P1.4.b — per-cycle :class:`BudgetGuard` (token + wallclock caps),
+emits ``BUDGET_EXCEEDED`` into the event log on first breach.
 """
 
+from caqrs.orchestrator.budget import (
+    BudgetGuard,
+    BudgetStatus,
+    BudgetStatusKind,
+    CycleBudget,
+)
 from caqrs.orchestrator.event_log import EventLog, load_jsonl
 from caqrs.orchestrator.events import (
     CycleEvent,
@@ -43,7 +52,11 @@ from caqrs.orchestrator.state import OrchestratorState
 from caqrs.orchestrator.state_machine import OrchestratorStateMachine, StateTransition
 
 __all__ = [
+    "BudgetGuard",
+    "BudgetStatus",
+    "BudgetStatusKind",
     "CallRecord",
+    "CycleBudget",
     "CycleEvent",
     "CycleEventKind",
     "EventLog",
