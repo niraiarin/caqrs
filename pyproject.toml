@@ -117,6 +117,9 @@ addopts = "-ra --strict-markers --strict-config"
 testpaths = ["tests"]
 xfail_strict = true
 asyncio_mode = "auto"
+markers = [
+    "live: requires a real LLM endpoint, gated by CAQRS_LIVE=1",
+]
 filterwarnings = [
     "error",
     # pytest-asyncio + httpx leaves selector sockets / event loops dangling
