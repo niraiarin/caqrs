@@ -132,10 +132,16 @@ class PolymarketClobClient:
     async def get_midpoint(self, *, token_id: str) -> Decimal:
         """Best-bid / best-ask midpoint for the given token id.
 
-        The CLOB returns ``{"mid_price": "0.45"}`` (string).
+        Polymarket's docs example shows ``{"mid_price": "0.45"}`` but
+        the live API returns ``{"mid": "0.535"}`` (different key).
+        We accept either.
         """
         body = await self._get_json("/midpoint", params={"token_id": token_id})
-        return _coerce_decimal(body, "mid_price")
+        for key in ("mid", "mid_price"):
+            if key in body:
+                return _coerce_decimal(body, key)
+        msg = f"Polymarket /midpoint response missing both 'mid' and 'mid_price': {dict(body)}"
+        raise PolymarketError(message=msg)
 
     async def get_price(self, *, token_id: str, side: Side) -> Decimal:
         """Best price on the requested side for the given token id.
@@ -262,21 +268,30 @@ def _to_decimal(value: Any, *, field: str) -> Decimal:
 
 
 def _to_unix_seconds_datetime(value: Any, *, field: str) -> datetime:
-    """Polymarket sometimes returns a unix-seconds value as a string, sometimes as int.
-    Normalise to tz-aware UTC datetime.
+    """Decode a Polymarket unix timestamp to tz-aware UTC datetime.
+
+    The CLOB returns the value as either int or string and — surveyed
+    against the live API — sometimes in seconds and sometimes in
+    milliseconds. We auto-detect: any value >= 1e11 is treated as
+    milliseconds (a seconds value that large would be year ~5138,
+    while real seconds-since-epoch sits around 1.7e9).
     """
     if isinstance(value, str):
         try:
-            seconds = int(value)
+            raw = int(value)
         except ValueError as exc:
             msg = f"Polymarket field {field!r} is not an integer-string timestamp: {value!r}"
             raise PolymarketError(message=msg) from exc
     elif isinstance(value, int) and not isinstance(value, bool):
-        seconds = value
+        raw = value
     else:
         msg = f"Polymarket field {field!r} has unsupported timestamp type {type(value).__name__}"
         raise PolymarketError(message=msg)
+    seconds = raw / 1000 if raw >= _MILLISECOND_THRESHOLD else raw
     return datetime.fromtimestamp(seconds, tz=UTC)
+
+
+_MILLISECOND_THRESHOLD = 10**11
 
 
 def _parse_orderbook_levels(raw: Any, *, side: str) -> tuple[OrderbookLevel, ...]:

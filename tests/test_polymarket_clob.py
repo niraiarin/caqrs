@@ -50,6 +50,19 @@ async def test_get_midpoint_accepts_float_response() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_get_midpoint_accepts_short_mid_key() -> None:
+    """Live Polymarket returns the midpoint under the key ``mid``;
+    the docs example shows ``mid_price``. Accept both."""
+    respx.get(f"{_BASE}/midpoint").mock(
+        return_value=httpx.Response(200, json={"mid": "0.535"}),
+    )
+    async with PolymarketClobClient() as clob:
+        mid = await clob.get_midpoint(token_id=_TOKEN)
+    assert mid == Decimal("0.535")
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_get_midpoint_passes_token_id_query_param() -> None:
     route = respx.get(f"{_BASE}/midpoint").mock(
         return_value=httpx.Response(200, json={"mid_price": "0.5"}),
@@ -124,6 +137,31 @@ async def test_get_orderbook_parses_full_snapshot() -> None:
     assert book.tick_size == Decimal("0.01")
     assert book.last_trade_price == Decimal("0.45")
     assert book.neg_risk is False
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_orderbook_parses_millisecond_timestamp() -> None:
+    """Live Polymarket returns timestamps in milliseconds even though
+    the docs example shows seconds. The parser must auto-detect."""
+    respx.get(f"{_BASE}/book").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "market": "0xmarket",
+                "asset_id": _TOKEN,
+                "timestamp": "1735689600000",  # ms = 2025-01-01 00:00:00 UTC
+                "bids": [],
+                "asks": [],
+                "min_order_size": "1",
+                "tick_size": "0.01",
+                "neg_risk": False,
+            },
+        ),
+    )
+    async with PolymarketClobClient() as clob:
+        book = await clob.get_orderbook(token_id=_TOKEN)
+    assert book.timestamp == datetime(2025, 1, 1, tzinfo=UTC)
 
 
 @pytest.mark.asyncio
