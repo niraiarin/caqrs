@@ -21,9 +21,14 @@ Both endpoints follow the J-Quants pagination convention
 
 Earnings summary, calendar, and the paid-tier endpoints land in a
 follow-up slice when callers need them.
+
+P1.11.b — :func:`fetch_jquants_asset_snapshot` composes the daily-bar
+endpoint into a single :class:`AssetSnapshot` ready to drop onto an
+``ObserverArtifact``. Mirrors the Polymarket helper pattern.
 """
 
 from caqrs.data.jquants.client import JQuantsClient, JQuantsError
+from caqrs.data.jquants.observer_signals import fetch_jquants_asset_snapshot
 from caqrs.data.jquants.schemas import JQuantsDailyBar, JQuantsListedStock
 
 __all__ = [
@@ -31,4 +36,5 @@ __all__ = [
     "JQuantsDailyBar",
     "JQuantsError",
     "JQuantsListedStock",
+    "fetch_jquants_asset_snapshot",
 ]
