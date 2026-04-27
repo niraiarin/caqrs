@@ -1,8 +1,8 @@
 """End-to-end research-cycle driver.
 
 The :class:`CycleRunner` composes the orchestration primitives
-(state machine + event log + budget guard) with the five typed
-agents (observer / hypothesis / skeptic / research / auditor) into
+(state machine + event log + budget guard) with the six typed agents
+(observer / hypothesis / skeptic / research / auditor / decider) into
 one async ``run(observer_input) -> CycleResult`` entry point.
 
 The backtest step is executed by an injected
@@ -13,9 +13,12 @@ production engine arrives in P2.
 
 Termination semantics:
 
-- **Happy path:** Observer → Hypothesis → Skeptic (verdict=PROCEED)
-  → Research → backtest → Auditor. Terminal state ``AUDITING``;
-  ``CYCLE_COMPLETED`` event with aggregate token totals.
+- **Happy path (audit pass):** Observer → Hypothesis → Skeptic
+  (verdict=PROCEED) → Research → backtest → Auditor (verdict=PASS)
+  → Decider. Terminal state ``DECIDING``; ``CYCLE_COMPLETED``
+  with aggregate token totals.
+- **Audit fail:** Auditor verdict ``FAIL`` skips the Decider and
+  ends cleanly at terminal state ``AUDITING``; ``CYCLE_COMPLETED``.
 - **Skeptic non-proceed:** Verdict ``KILL`` or ``REQUIRE_REVISION``
   ends the cycle cleanly at terminal state ``SCRUTINIZING``;
   ``CYCLE_COMPLETED`` (a kill is a normal outcome, not an abort).
@@ -42,6 +45,7 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict
 
 from caqrs.agents.auditor import AuditorInput
+from caqrs.agents.decider import DeciderInput
 from caqrs.agents.protocol import Agent, AgentResult
 from caqrs.agents.research import ResearchInput
 from caqrs.orchestrator.budget import (
@@ -66,9 +70,10 @@ from caqrs.orchestrator.state_machine import (
     OrchestratorStateMachine,
     StateTransition,
 )
-from caqrs.schemas.audit import AuditReport
+from caqrs.schemas.audit import AuditReport, AuditVerdict
 from caqrs.schemas.backtest_report import BacktestReport
 from caqrs.schemas.common import new_run_id
+from caqrs.schemas.decision import StrategyDecision
 from caqrs.schemas.hypothesis_card import HypothesisCard
 from caqrs.schemas.observer import ObserverArtifact, ObserverInput
 from caqrs.schemas.research_plan import ResearchPlan
@@ -103,6 +108,7 @@ class CycleArtifacts(BaseModel):
     research: ResearchPlan | None = None
     backtest: BacktestReport | None = None
     audit: AuditReport | None = None
+    decision: StrategyDecision | None = None
 
 
 class CycleResult(BaseModel):
@@ -137,6 +143,7 @@ class _ArtifactsBuilder:
     research: ResearchPlan | None = None
     backtest: BacktestReport | None = None
     audit: AuditReport | None = None
+    decision: StrategyDecision | None = None
 
     def count(self) -> int:
         return sum(
@@ -148,6 +155,7 @@ class _ArtifactsBuilder:
                 self.research,
                 self.backtest,
                 self.audit,
+                self.decision,
             )
             if v is not None
         )
@@ -160,6 +168,7 @@ class _ArtifactsBuilder:
             research=self.research,
             backtest=self.backtest,
             audit=self.audit,
+            decision=self.decision,
         )
 
 
@@ -180,7 +189,7 @@ class _RunContext:
 
 
 class CycleRunner:
-    """Drives one research cycle from Observer through Auditor."""
+    """Drives one research cycle from Observer through Decider."""
 
     def __init__(
         self,
@@ -190,6 +199,7 @@ class CycleRunner:
         skeptic: Agent[HypothesisCard, SkepticReport],
         research: Agent[ResearchInput, ResearchPlan],
         auditor: Agent[AuditorInput, AuditReport],
+        decider: Agent[DeciderInput, StrategyDecision],
         backtest_executor: BacktestExecutor,
         event_log: EventLog,
         budget: CycleBudget,
@@ -201,6 +211,7 @@ class CycleRunner:
         self._skeptic = skeptic
         self._research = research
         self._auditor = auditor
+        self._decider = decider
         self._backtest_executor = backtest_executor
         self._event_log = event_log
         self._budget = budget
@@ -310,7 +321,29 @@ class CycleRunner:
             return self._finalize(ctx=ctx, halt=audit_outcome)
         ctx.artifacts.audit = audit_outcome
 
-        return self._complete(ctx=ctx, terminal=OrchestratorState.AUDITING)
+        # Audit failure terminates here without calling the Decider; the
+        # state machine routes AUDITING → IDLE in _complete().
+        if audit_outcome.verdict is not AuditVerdict.PASS:
+            return self._complete(ctx=ctx, terminal=OrchestratorState.AUDITING)
+
+        ctx.machine.transition(OrchestratorState.DECIDING)
+
+        # === Decider ===
+        decider_outcome = await self._call_agent(
+            ctx=ctx,
+            agent=self._decider,
+            agent_name="decider",
+            payload=DeciderInput(
+                hypothesis=hypothesis_outcome,
+                backtest=backtest_report,
+                audit=audit_outcome,
+            ),
+        )
+        if isinstance(decider_outcome, _Halt):
+            return self._finalize(ctx=ctx, halt=decider_outcome)
+        ctx.artifacts.decision = decider_outcome
+
+        return self._complete(ctx=ctx, terminal=OrchestratorState.DECIDING)
 
     # === Helpers ===
 
