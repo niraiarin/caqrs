@@ -32,10 +32,12 @@ and so live at the agent / provider layer, not at this orchestration
 layer.
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
+from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
 
@@ -50,6 +52,7 @@ from caqrs.orchestrator.budget import (
 )
 from caqrs.orchestrator.event_log import EventLog
 from caqrs.orchestrator.events import (
+    CycleEvent,
     agent_failed_event,
     agent_invoked_event,
     agent_succeeded_event,
@@ -72,6 +75,17 @@ from caqrs.schemas.research_plan import ResearchPlan
 from caqrs.schemas.skeptic import SkepticReport, SkepticVerdict
 
 BacktestExecutor = Callable[[ResearchPlan], Awaitable[BacktestReport]]
+
+
+class CycleStoreProtocol(Protocol):
+    """Structural contract for the runner's optional cycle archive.
+
+    Defined here (instead of imported from :mod:`caqrs.memory`) to keep
+    the orchestrator package free of memory-layer dependencies.
+    :class:`caqrs.memory.CycleStore` matches by signature.
+    """
+
+    def save(self, *, result: "CycleResult", events: Iterable[CycleEvent]) -> Path: ...
 
 
 class CycleArtifacts(BaseModel):
@@ -180,6 +194,7 @@ class CycleRunner:
         event_log: EventLog,
         budget: CycleBudget,
         clock: Callable[[], datetime] | None = None,
+        cycle_store: CycleStoreProtocol | None = None,
     ) -> None:
         self._observer = observer
         self._hypothesis = hypothesis
@@ -190,6 +205,7 @@ class CycleRunner:
         self._event_log = event_log
         self._budget = budget
         self._clock = clock
+        self._cycle_store = cycle_store
 
     async def run(self, observer_input: ObserverInput) -> CycleResult:  # noqa: PLR0911
         # Each early-return is a deliberate fail-fast at a phase boundary
@@ -382,7 +398,7 @@ class CycleRunner:
                 total_token_out=ctx.totals.token_out,
             ),
         )
-        return CycleResult(
+        result = CycleResult(
             cycle_id=ctx.cycle_id,
             terminal_state=terminal,
             artifacts=ctx.artifacts.freeze(),
@@ -390,6 +406,8 @@ class CycleRunner:
             total_token_in=ctx.totals.token_in,
             total_token_out=ctx.totals.token_out,
         )
+        self._persist_if_configured(ctx=ctx, result=result)
+        return result
 
     def _finalize(self, *, ctx: _RunContext, halt: _Halt) -> CycleResult:
         at_state = ctx.machine.state.value
@@ -401,11 +419,21 @@ class CycleRunner:
                 at_state=at_state,
             ),
         )
-        return CycleResult(
+        result = CycleResult(
             cycle_id=ctx.cycle_id,
             terminal_state=OrchestratorState.ERROR,
             artifacts=ctx.artifacts.freeze(),
             aborted_reason=halt.reason,
             total_token_in=ctx.totals.token_in,
             total_token_out=ctx.totals.token_out,
+        )
+        self._persist_if_configured(ctx=ctx, result=result)
+        return result
+
+    def _persist_if_configured(self, *, ctx: _RunContext, result: CycleResult) -> None:
+        if self._cycle_store is None:
+            return
+        self._cycle_store.save(
+            result=result,
+            events=self._event_log.filter_by_cycle(ctx.cycle_id),
         )

@@ -15,6 +15,7 @@ from pydantic import BaseModel, ValidationError
 from caqrs.agents.auditor import AuditorInput
 from caqrs.agents.protocol import AgentResult
 from caqrs.agents.research import ResearchInput
+from caqrs.memory import CycleStore
 from caqrs.orchestrator import (
     CycleBudget,
     CycleEventKind,
@@ -22,6 +23,7 @@ from caqrs.orchestrator import (
     CycleRunner,
     EventLog,
     OrchestratorState,
+    cycle_started_event,
     new_cycle_id,
 )
 from caqrs.schemas.audit import AcceptanceCheck, AuditReport, AuditVerdict
@@ -264,6 +266,7 @@ def _build_runner(
     event_log: EventLog | None = None,
     budget: CycleBudget | None = None,
     clock: Callable[[], datetime] | None = None,
+    cycle_store: object = None,  # CycleStoreProtocol; typed loose to avoid cycle in test deps
 ) -> CycleRunner:
     obs = observer_artifact or _observer_artifact()
     hyp = hypothesis_card or _hypothesis_card()
@@ -302,6 +305,7 @@ def _build_runner(
         event_log=log,
         budget=bg,
         clock=clock,
+        cycle_store=cycle_store,  # type: ignore[arg-type]
     )
 
 
@@ -633,3 +637,82 @@ async def test_runner_auditor_input_carries_backtest() -> None:
     assert len(captured) == 1
     assert captured[0].hypothesis.metadata.run_id == hyp.metadata.run_id
     assert captured[0].backtest.plan_run_id == rp.metadata.run_id
+
+
+# === Auto-persist via cycle_store ===
+
+
+class _RecordingStore:
+    """In-memory CycleStoreProtocol implementation for assertion."""
+
+    def __init__(self) -> None:
+        self.saves: list[tuple[CycleResult, tuple[object, ...]]] = []
+
+    def save(self, *, result: CycleResult, events: object) -> object:
+        self.saves.append((result, tuple(events)))  # type: ignore[arg-type]
+        return None  # not a Path; runner does not consume return value
+
+
+@pytest.mark.asyncio
+async def test_auto_persist_saves_cycle_when_store_provided() -> None:
+    store = _RecordingStore()
+    log = EventLog()
+    runner = _build_runner(event_log=log, cycle_store=store)
+    result = await runner.run(_observer_input())
+
+    assert len(store.saves) == 1
+    saved_result, saved_events = store.saves[0]
+    assert saved_result == result
+    # All events for this cycle were forwarded:
+    assert len(saved_events) == len(log.filter_by_cycle(result.cycle_id))
+
+
+@pytest.mark.asyncio
+async def test_auto_persist_only_includes_events_for_this_cycle() -> None:
+    """A shared EventLog with prior unrelated events does not pollute the saved cycle."""
+    log = EventLog()
+    # Pre-populate with a different cycle's events
+    other_cycle_id = new_cycle_id()
+    log.append(cycle_started_event(cycle_id=other_cycle_id))
+
+    store = _RecordingStore()
+    runner = _build_runner(event_log=log, cycle_store=store)
+    result = await runner.run(_observer_input())
+
+    assert len(store.saves) == 1
+    _, saved_events = store.saves[0]
+    assert all(e.cycle_id == result.cycle_id for e in saved_events)  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_auto_persist_records_aborted_cycle() -> None:
+    store = _RecordingStore()
+    log = EventLog()
+    runner = _build_runner(event_log=log, cycle_store=store, observer_error="boom")
+    result = await runner.run(_observer_input())
+
+    assert result.aborted_reason is not None
+    assert len(store.saves) == 1
+    saved_result, _ = store.saves[0]
+    assert saved_result.aborted_reason == result.aborted_reason
+
+
+@pytest.mark.asyncio
+async def test_no_persist_when_store_is_none() -> None:
+    """Runner without a cycle_store still completes successfully."""
+    runner = _build_runner()  # default cycle_store=None
+    result = await runner.run(_observer_input())
+    assert result.aborted_reason is None  # smoke test only
+
+
+@pytest.mark.asyncio
+async def test_real_cycle_store_round_trips_via_auto_persist(tmp_path: object) -> None:
+    """End-to-end with the actual CycleStore implementation."""
+    store = CycleStore(root=tmp_path)  # type: ignore[arg-type]
+    log = EventLog()
+    runner = _build_runner(event_log=log, cycle_store=store)
+    result = await runner.run(_observer_input())
+
+    loaded_result, loaded_events = store.load(result.cycle_id)
+    assert loaded_result == result
+    assert len(loaded_events) == len(log.filter_by_cycle(result.cycle_id))
