@@ -9,6 +9,11 @@ and ``docs/research/mercury-survey/06-identity-and-soul.md``).
 """
 
 from caqrs.agents.prompts.guardrails import RESEARCH_GUARDRAILS
+from caqrs.agents.prompts.polymarket import format_polymarket_block
 from caqrs.agents.prompts.role_template import build_agent_system_prompt
 
-__all__ = ["RESEARCH_GUARDRAILS", "build_agent_system_prompt"]
+__all__ = [
+    "RESEARCH_GUARDRAILS",
+    "build_agent_system_prompt",
+    "format_polymarket_block",
+]
