@@ -9,6 +9,11 @@ P1.6.a — :class:`PolymarketClobClient` covers the public read-only
 endpoints (``/midpoint``, ``/price``, ``/book``, ``/prices-history``)
 of the CLOB API. No authentication required; all data is public.
 
+P1.6.b — :class:`PolymarketGammaClient` covers Gamma market
+discovery and metadata (``/markets`` list + ``/markets/{id|slug}``
+detail). Decodes Polymarket's JSON-encoded-string ``clobTokenIds`` /
+``outcomes`` / ``outcomePrices`` fields into plain tuples.
+
 Trade history (Data API) and order placement (CLOB authenticated
 endpoints) are out of scope for the Observer's data-gathering role.
 """
@@ -19,7 +24,9 @@ from caqrs.data.polymarket.clob_client import (
     PriceHistoryInterval,
     Side,
 )
+from caqrs.data.polymarket.gamma_client import PolymarketGammaClient
 from caqrs.data.polymarket.schemas import (
+    GammaMarket,
     Orderbook,
     OrderbookLevel,
     PriceHistory,
@@ -27,10 +34,12 @@ from caqrs.data.polymarket.schemas import (
 )
 
 __all__ = [
+    "GammaMarket",
     "Orderbook",
     "OrderbookLevel",
     "PolymarketClobClient",
     "PolymarketError",
+    "PolymarketGammaClient",
     "PriceHistory",
     "PriceHistoryInterval",
     "PricePoint",
