@@ -128,6 +128,23 @@ async def test_complete_raises_when_not_logged_in(tmp_path: Path) -> None:
         await p.complete(messages=_msgs(), schema=_Sentiment, max_output_tokens=64)
 
 
+async def test_complete_raises_when_cred_expired(tmp_path: Path) -> None:
+    home = tmp_path / ".codex"
+    home.mkdir(parents=True)
+    (home / "auth.json").write_text(
+        json.dumps(
+            {
+                "tokens": {"access_token": "old-token", "refresh_token": "rt"},
+                "last_refresh": 0,  # expiry derived as ~1h after epoch
+            },
+        ),
+        encoding="utf-8",
+    )
+    p = OpenAIViaCodexCLI(codex_home=home)
+    with pytest.raises(AuthError, match=r"expired at .*codex login"):
+        await p.complete(messages=_msgs(), schema=_Sentiment, max_output_tokens=64)
+
+
 # === Successful round-trip ===
 
 

@@ -149,6 +149,26 @@ async def test_complete_raises_when_not_logged_in(tmp_path: Path) -> None:
         await p.complete(messages=_msgs(), schema=_Pulse, max_output_tokens=64)
 
 
+async def test_complete_raises_when_cred_expired(tmp_path: Path) -> None:
+    creds_dir = tmp_path / ".claude"
+    creds_dir.mkdir()
+    (creds_dir / ".credentials.json").write_text(
+        json.dumps(
+            {
+                "claudeAiOauth": {
+                    "accessToken": "sk-ant-oat-old",
+                    "refreshToken": "rt",
+                    "expiresAt": 1,
+                },
+            },
+        ),
+        encoding="utf-8",
+    )
+    p = AnthropicViaClaudeCLI(home_dir=tmp_path)
+    with pytest.raises(AuthError, match=r"expired at .*claude login"):
+        await p.complete(messages=_msgs(), schema=_Pulse, max_output_tokens=64)
+
+
 # === Successful round-trip (OAuth) ===
 
 
