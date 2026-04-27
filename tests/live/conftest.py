@@ -13,22 +13,22 @@ import pytest
 from caqrs.providers import OpenAICompatProvider
 
 _DEFAULT_BASE_URL = "http://localhost:11500/v1"
-_DEFAULT_API_KEY = "sk-litellm-local"  # LiteLLM local default
+_DEFAULT_API_KEY = "sk-litellm-local"
 _MODEL_ENV_VAR = "CAQRS_LITELLM_MODEL"
 _BASE_URL_ENV_VAR = "CAQRS_LITELLM_BASE_URL"
 _API_KEY_ENV_VAR = "CAQRS_LITELLM_API_KEY"
+_JQUANTS_ENV_VAR = "JQUANTS_API_KEY"
 
 
 @pytest.fixture
 def litellm_provider() -> OpenAICompatProvider:
-    """Build an ``OpenAICompatProvider`` configured for the local LiteLLM gateway.
+    """Build an OpenAICompatProvider for the local LiteLLM gateway.
 
-    The model id is mandatory (no default) — different LiteLLM
-    deployments expose different model names (e.g.
-    ``openrouter/anthropic/claude-opus-4.7``,
-    ``ollama/qwen3-coder``). The fixture short-circuits via
-    ``pytest.skip`` when the env var is missing so the test marks as
-    not-run rather than fails on a clean machine.
+    Different LiteLLM deployments expose different model aliases
+    (openrouter/..., ollama/...) so the model id is mandatory. The
+    fixture short-circuits via pytest.skip when the env var is
+    missing so live tests deselect rather than fail on a clean
+    machine.
     """
     model = os.environ.get(_MODEL_ENV_VAR)
     if not model:
@@ -38,3 +38,19 @@ def litellm_provider() -> OpenAICompatProvider:
     base_url = os.environ.get(_BASE_URL_ENV_VAR, _DEFAULT_BASE_URL)
     api_key = os.environ.get(_API_KEY_ENV_VAR, _DEFAULT_API_KEY)
     return OpenAICompatProvider(base_url=base_url, api_key=api_key, model=model)
+
+
+@pytest.fixture
+def jquants_api_key() -> str:
+    """Return the J-Quants API key from the env, or skip if missing.
+
+    Live J-Quants tests need a real key (free-tier registration is
+    sufficient); deselect when running on a machine without one
+    configured rather than fail.
+    """
+    key = os.environ.get(_JQUANTS_ENV_VAR)
+    if not key:
+        pytest.skip(
+            f"{_JQUANTS_ENV_VAR} not set; sign up at jpx-jquants.com (free tier) to run.",
+        )
+    return key
