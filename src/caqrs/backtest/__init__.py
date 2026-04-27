@@ -15,5 +15,19 @@ Polars is required for this subpackage (already pulled in via the
 """
 
 from caqrs.backtest.engine import run_walk_forward
+from caqrs.backtest.providers import (
+    BacktestExecutor,
+    JQuantsPriceProvider,
+    PriceProvider,
+    buy_and_hold_signals,
+    make_jquants_buy_and_hold_executor,
+)
 
-__all__ = ["run_walk_forward"]
+__all__ = [
+    "BacktestExecutor",
+    "JQuantsPriceProvider",
+    "PriceProvider",
+    "buy_and_hold_signals",
+    "make_jquants_buy_and_hold_executor",
+    "run_walk_forward",
+]
