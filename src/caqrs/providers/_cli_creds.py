@@ -175,6 +175,16 @@ def _decode_jwt_exp_ms(token: str) -> int | None:
 # === Keychain (macOS) ===
 
 
+def _current_platform() -> str:
+    """Indirection layer: mypy cannot platform-narrow through a function call.
+
+    Without this, ``sys.platform != "darwin"`` is treated as always-True on
+    Linux mypy runs, marking the rest of ``_real_keychain_reader`` as
+    unreachable and failing the strict gate cross-platform.
+    """
+    return sys.platform
+
+
 def _real_keychain_reader(service: str, account: str | None) -> str | None:
     """Read a generic-password secret via the macOS ``security`` CLI.
 
@@ -182,7 +192,7 @@ def _real_keychain_reader(service: str, account: str | None) -> str | None:
     Keychain entry is absent. The output is the raw secret string written
     to stdout by ``security -w``; callers parse it as JSON.
     """
-    if sys.platform != "darwin":
+    if _current_platform() != "darwin":
         return None
     args = ["security", "find-generic-password", "-s", service]
     if account:
