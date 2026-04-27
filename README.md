@@ -111,21 +111,48 @@ scripts/            # standalone runnables (live smoke, manual integration check
 A `CycleQueue` provides a serial dispatcher with reentrancy guard so concurrent enqueues
 are safe but cycles execute one at a time.
 
+## Drive cycles unattended
+
+`Heartbeat` is a pure interval-based fire tracker that composes with `CycleQueue` so a
+caller's event loop can dispatch cycles on a schedule without threads or cron:
+
+```python
+import asyncio
+from datetime import timedelta
+
+from caqrs.orchestrator import CycleQueue, Heartbeat
+
+heartbeat = Heartbeat(interval=timedelta(hours=4))
+queue = CycleQueue(runner=runner)  # CycleRunner built once with all 6 agents
+
+async def loop() -> None:
+    while True:
+        if heartbeat.is_due():
+            queue.enqueue(build_observer_input())
+            heartbeat.fire()
+        await queue.run_one()
+        await asyncio.sleep(1)
+```
+
+`CycleStore.prune_older_than(cutoff)` keeps the per-cycle archive bounded; call it
+periodically (e.g. once per day) with a 30-day cutoff.
+
 ## Roadmap
 
-| Phase     | Scope                                                          | Status        |
-| --------- | -------------------------------------------------------------- | ------------- |
-| P0        | Artifact schemas + Agent protocol + CI                         | ✅            |
-| P1.1      | Provider stack (Anthropic / Codex / OpenAI-compat / registry)  | ✅            |
-| P1.2      | Six concrete agents on `LLMAgent` base                         | ✅            |
-| P1.3      | Memory: per-cycle archive + auto-persist via runner            | ✅ a + b      |
-| P1.4      | Orchestrator (events, budget, runner, queue)                   | ✅ a + b + c + d-mini |
-| P1.5      | Live LLM smoke test (Observer)                                 | ✅            |
-| P1.6      | Polymarket data source + Observer / Hypothesis integration     | ✅            |
-| P1.7      | README refresh (this PR)                                       | ✅            |
-| P2        | Walk-forward backtest engine (vectorbt) replacing the stub     | —             |
-| P3        | Policy Gateway + paper broker + asset/loss-limit projections   | —             |
-| P4        | Live broker adapter (gated by human approval)                  | —             |
+| Phase     | Scope                                                          | Status                  |
+| --------- | -------------------------------------------------------------- | ----------------------- |
+| P0        | Artifact schemas + Agent protocol + CI                         | ✅                      |
+| P1.1      | Provider stack (Anthropic / Codex / OpenAI-compat / registry)  | ✅                      |
+| P1.2      | Six concrete agents on `LLMAgent` base                         | ✅                      |
+| P1.3      | Memory: archive + auto-persist + episodic prune                | ✅ a + b + c            |
+| P1.4      | Orchestrator (events, budget, runner, queue, heartbeat)        | ✅ a + b + c + d-mini + d-full |
+| P1.5      | Live LLM smoke test (Observer)                                 | ✅                      |
+| P1.6      | Polymarket data source + Observer / Hypothesis integration     | ✅ a–g                  |
+| P1.7      | README refresh                                                 | ✅                      |
+| P1.8      | Full-cycle live smoke test (LLM + Polymarket end-to-end)       | ✅                      |
+| P2        | Walk-forward backtest engine (vectorbt) replacing the stub     | —                       |
+| P3        | Policy Gateway + paper broker + asset/loss-limit projections   | —                       |
+| P4        | Live broker adapter (gated by human approval)                  | —                       |
 
 ## License
 
