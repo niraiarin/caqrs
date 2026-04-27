@@ -22,6 +22,12 @@ dependencies = [
     "httpx>=0.27,<1",
 ]
 
+[project.optional-dependencies]
+# Parquet reader for caqrs.data.polymarket_archive (hourly snapshots from
+# archive.pmxt.dev). Install with: pip install caqrs[archive] or
+# uv add --optional archive caqrs[archive].
+archive = ["polars>=1.0,<2"]
+
 [project.urls]
 Homepage = "https://github.com/niraiarin/caqrs"
 Issues = "https://github.com/niraiarin/caqrs/issues"
@@ -42,6 +48,9 @@ dev = [
     "ruff>=0.6.0",
     "mypy>=1.10",
     "respx>=0.21",
+    # The archive adapter's unit + live tests need polars; keep it in dev
+    # so `uv sync` pulls it in even without --extra archive.
+    "polars>=1.0,<2",
 ]
 
 # === ruff ===
