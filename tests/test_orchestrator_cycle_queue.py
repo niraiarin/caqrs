@@ -1,7 +1,7 @@
 """Tests for the CycleQueue serial dispatcher."""
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -14,6 +14,7 @@ from caqrs.orchestrator import (
     CycleResult,
     CycleRunner,
     EventLog,
+    Heartbeat,
     new_cycle_id,
 )
 from caqrs.schemas.audit import AcceptanceCheck, AuditReport, AuditVerdict
@@ -288,3 +289,78 @@ async def test_run_one_respects_running_flag() -> None:
         assert await queue.run_one() is None
     finally:
         queue._running = False
+
+
+# === Heartbeat x CycleQueue composition ===
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_drives_queue_at_interval_boundaries() -> None:
+    """Heartbeat docstring promises 'if is_due -> enqueue -> fire'
+    composes with the queue. Drive 6 ticks across a 5-min interval,
+    advancing the clock 2 min per tick. Cycles run only on the
+    boundary ticks.
+    """
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+
+    # Provision only the reads actually consumed: every tick reads
+    # once on is_due(); ticks where is_due() is True read again on
+    # fire(). Ticks 1 and 4 fire (2 reads each); ticks 2, 3, 5, 6 are
+    # idle (1 read each) — 8 reads total.
+    def _t(mins: int) -> datetime:
+        return base + timedelta(minutes=mins)
+
+    clock_values = [
+        _t(0),
+        _t(0),  # tick 1: is_due, fire
+        _t(2),  # tick 2: is_due only
+        _t(4),  # tick 3: is_due only
+        _t(6),
+        _t(6),  # tick 4: is_due, fire
+        _t(8),  # tick 5: is_due only
+        _t(10),  # tick 6: is_due only
+    ]
+    clock_iter = iter(clock_values)
+
+    def _read_clock() -> datetime:
+        return next(clock_iter)
+
+    queue = CycleQueue(runner=_build_runner())
+    heartbeat = Heartbeat(interval=timedelta(minutes=5), clock=_read_clock)
+
+    cycles_run = 0
+    for _ in range(6):
+        if heartbeat.is_due():
+            queue.enqueue(_observer_input())
+            heartbeat.fire()
+            result = await queue.run_one()
+            assert result is not None
+            cycles_run += 1
+
+    # Tick 1 (t=0):   no prior fire -> due. Fire@0. Cycle #1.
+    # Tick 2 (t=2):   2 < 5 -> not due.
+    # Tick 3 (t=4):   4 < 5 -> not due.
+    # Tick 4 (t=6):   6 >= 5 since fire@0 -> due. Fire@6. Cycle #2.
+    # Tick 5 (t=8):   8-6=2 < 5 -> not due.
+    # Tick 6 (t=10):  10-6=4 < 5 -> not due.
+    expected_cycles = 2
+    assert cycles_run == expected_cycles
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_idle_tick_leaves_queue_empty() -> None:
+    """When is_due() returns False the caller does not enqueue."""
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    # fire@0 (1 read) + is_due at t=1min (1 read).
+    clock_values = [base, base + timedelta(minutes=1)]
+    clock_iter = iter(clock_values)
+
+    def _read_clock() -> datetime:
+        return next(clock_iter)
+
+    queue = CycleQueue(runner=_build_runner())
+    heartbeat = Heartbeat(interval=timedelta(minutes=5), clock=_read_clock)
+
+    heartbeat.fire()
+    assert heartbeat.is_due() is False
+    assert queue.pending == 0
