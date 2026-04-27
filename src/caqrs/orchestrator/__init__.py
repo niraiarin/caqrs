@@ -12,6 +12,11 @@ Foundation for the subsequent budget / queue / cycle-runner slices.
 
 P1.4.b — per-cycle :class:`BudgetGuard` (token + wallclock caps),
 emits ``BUDGET_EXCEEDED`` into the event log on first breach.
+
+P1.4.c — :class:`CycleRunner` composes the primitives above with the
+five typed agents into one ``run(observer_input) -> CycleResult``
+entry point. Backtest is supplied as an injected callable so P1
+ships without the P2 backtest engine.
 """
 
 from caqrs.orchestrator.budget import (
@@ -19,6 +24,12 @@ from caqrs.orchestrator.budget import (
     BudgetStatus,
     BudgetStatusKind,
     CycleBudget,
+)
+from caqrs.orchestrator.cycle_runner import (
+    BacktestExecutor,
+    CycleArtifacts,
+    CycleResult,
+    CycleRunner,
 )
 from caqrs.orchestrator.event_log import EventLog, load_jsonl
 from caqrs.orchestrator.events import (
@@ -52,13 +63,17 @@ from caqrs.orchestrator.state import OrchestratorState
 from caqrs.orchestrator.state_machine import OrchestratorStateMachine, StateTransition
 
 __all__ = [
+    "BacktestExecutor",
     "BudgetGuard",
     "BudgetStatus",
     "BudgetStatusKind",
     "CallRecord",
+    "CycleArtifacts",
     "CycleBudget",
     "CycleEvent",
     "CycleEventKind",
+    "CycleResult",
+    "CycleRunner",
     "EventLog",
     "LoopDetection",
     "OrchestratorState",
