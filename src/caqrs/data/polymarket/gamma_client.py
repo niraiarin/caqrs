@@ -134,18 +134,35 @@ class PolymarketGammaClient:
         return _parse_market_list(body, endpoint="/markets")
 
     async def get_market(self, identifier: str) -> GammaMarket:
-        """Fetch a single market by id (all-digits) or slug.
+        """Fetch a single market by numeric id or slug.
 
-        The Gamma API routes both ``GET /markets/{id}`` and
-        ``GET /markets/{slug}``; the path is the same. We send the
-        identifier as supplied.
+        Polymarket's surface-level docs suggest ``GET /markets/{id}``
+        accepts either, but the live API rejects slugs with 422
+        ``"id is invalid"``. We dispatch:
+
+        - All-digits identifier → ``GET /markets/{id}``.
+        - Otherwise (slug) → ``GET /markets?slug=<slug>`` and take
+          the singleton result.
         """
-        path = f"/markets/{identifier}"
+        if identifier.isdigit():
+            return await self._get_market_by_id(identifier)
+        return await self._get_market_by_slug(identifier)
+
+    async def _get_market_by_id(self, market_id: str) -> GammaMarket:
+        path = f"/markets/{market_id}"
         body = await self._get_json(path, params=[])
         if not isinstance(body, Mapping):
             msg = f"Polymarket gamma {path} returned non-object body"
             raise PolymarketError(message=msg)
         return _parse_market(body)
+
+    async def _get_market_by_slug(self, slug: str) -> GammaMarket:
+        body = await self._get_json("/markets", params=[("slug", slug)])
+        markets = _parse_market_list(body, endpoint="/markets")
+        if not markets:
+            msg = f"Polymarket gamma slug {slug!r} not found"
+            raise PolymarketError(message=msg, status_code=404)
+        return markets[0]
 
     # === Internals ===
 

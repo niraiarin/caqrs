@@ -61,7 +61,61 @@ def _market_payload(
     return body
 
 
-# === GET /markets/{id} ===
+# === Identifier routing (numeric id vs slug) ===
+#
+# Polymarket's GET /markets/{id} only accepts numeric ids and returns
+# 422 'id is invalid' when given a slug — the public API contradicts
+# the surface-level docs that suggest the path accepts either. The
+# client must dispatch: numeric → path-based, slug → GET /markets?slug=.
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_market_with_numeric_id_uses_path_endpoint() -> None:
+    by_id_route = respx.get(f"{_BASE}/markets/12345").mock(
+        return_value=httpx.Response(200, json=_market_payload(market_id="12345")),
+    )
+    list_route = respx.get(f"{_BASE}/markets").mock(
+        return_value=httpx.Response(200, json=[]),
+    )
+    async with PolymarketGammaClient() as gamma:
+        market = await gamma.get_market("12345")
+    assert market.id == "12345"
+    assert by_id_route.call_count == 1
+    assert list_route.call_count == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_market_with_slug_uses_list_endpoint_with_slug_filter() -> None:
+    slug = "will-fed-cut-rates-2026"
+    list_route = respx.get(f"{_BASE}/markets").mock(
+        return_value=httpx.Response(200, json=[_market_payload(slug=slug)]),
+    )
+    by_id_route = respx.get(f"{_BASE}/markets/{slug}").mock(
+        return_value=httpx.Response(422, json={"error": "id is invalid"}),
+    )
+    async with PolymarketGammaClient() as gamma:
+        market = await gamma.get_market(slug)
+    assert market.slug == slug
+    assert list_route.call_count == 1
+    assert list_route.calls.last.request.url.params["slug"] == slug
+    # Must not have hit the path-based endpoint with a slug
+    assert by_id_route.call_count == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_market_by_slug_raises_when_no_match() -> None:
+    respx.get(f"{_BASE}/markets").mock(
+        return_value=httpx.Response(200, json=[]),
+    )
+    async with PolymarketGammaClient() as gamma:
+        with pytest.raises(PolymarketError, match="not found"):
+            await gamma.get_market("nonexistent-slug")
+
+
+# === GET /markets/{id} (parsing) ===
 
 
 @pytest.mark.asyncio
@@ -319,12 +373,14 @@ async def test_list_markets_omits_none_filters() -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_404_raises_with_status_code() -> None:
-    respx.get(f"{_BASE}/markets/missing").mock(
+    """Upstream HTTP 404 from the path-based /markets/{id} endpoint
+    surfaces with status_code preserved."""
+    respx.get(f"{_BASE}/markets/99999").mock(
         return_value=httpx.Response(404, text="not found"),
     )
     async with PolymarketGammaClient() as gamma:
         with pytest.raises(PolymarketError) as exc_info:
-            await gamma.get_market("missing")
+            await gamma.get_market("99999")
     assert exc_info.value.status_code == 404
 
 

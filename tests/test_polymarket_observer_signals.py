@@ -126,8 +126,8 @@ def test_polymarket_signal_binary_must_have_two_outcomes() -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_fetch_signal_combines_metadata_and_pricing() -> None:
-    respx.get(f"{_GAMMA}/markets/fed-cuts-2026").mock(
-        return_value=httpx.Response(200, json=_market_payload()),
+    respx.get(f"{_GAMMA}/markets", params={"slug": "fed-cuts-2026"}).mock(
+        return_value=httpx.Response(200, json=[_market_payload()]),
     )
     respx.get(f"{_CLOB}/midpoint", params={"token_id": "100"}).mock(
         return_value=httpx.Response(200, json={"mid_price": "0.62"}),
@@ -172,8 +172,8 @@ async def test_fetch_signal_combines_metadata_and_pricing() -> None:
 @respx.mock
 async def test_fetch_signal_degrades_gracefully_on_clob_failure() -> None:
     """Missing midpoint / book on one outcome must not abort the whole signal."""
-    respx.get(f"{_GAMMA}/markets/fed-cuts-2026").mock(
-        return_value=httpx.Response(200, json=_market_payload()),
+    respx.get(f"{_GAMMA}/markets", params={"slug": "fed-cuts-2026"}).mock(
+        return_value=httpx.Response(200, json=[_market_payload()]),
     )
     # Token 100 succeeds
     respx.get(f"{_CLOB}/midpoint", params={"token_id": "100"}).mock(
@@ -215,8 +215,8 @@ async def test_fetch_signal_market_without_tokens_yields_placeholder() -> None:
         clob_token_ids="[]",
         outcome_prices="[]",
     )
-    respx.get(f"{_GAMMA}/markets/empty-market").mock(
-        return_value=httpx.Response(200, json=payload),
+    respx.get(f"{_GAMMA}/markets", params={"slug": "empty-market"}).mock(
+        return_value=httpx.Response(200, json=[payload]),
     )
     async with PolymarketGammaClient() as gamma, PolymarketClobClient() as clob:
         signal = await fetch_polymarket_signal(
@@ -233,14 +233,16 @@ async def test_fetch_signal_market_without_tokens_yields_placeholder() -> None:
 @respx.mock
 async def test_fetch_polymarket_signals_returns_tuple_in_input_order() -> None:
     for slug, mid_yes in [("a", "0.20"), ("b", "0.80")]:
-        respx.get(f"{_GAMMA}/markets/{slug}").mock(
+        respx.get(f"{_GAMMA}/markets", params={"slug": slug}).mock(
             return_value=httpx.Response(
                 200,
-                json=_market_payload(
-                    market_id=f"id-{slug}",
-                    slug=slug,
-                    outcome_prices=f'["{mid_yes}", "0.5"]',
-                ),
+                json=[
+                    _market_payload(
+                        market_id=f"id-{slug}",
+                        slug=slug,
+                        outcome_prices=f'["{mid_yes}", "0.5"]',
+                    ),
+                ],
             ),
         )
         respx.get(f"{_CLOB}/midpoint", params={"token_id": "100"}).mock(
