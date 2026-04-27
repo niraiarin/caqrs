@@ -1,17 +1,20 @@
 """OpenAI via Codex CLI OAuth session reuse.
 
-Status: P1.0 stub. Real implementation lands in P1.1, ported from
-OpenClaw ``extensions/codex/src/app-server/auth-bridge.ts`` (MIT-licensed;
-commit hash and SPDX header will be added at port time).
+Status: P1.1.b. Cred reading (file + macOS Keychain) is wired up via
+``is_configured()``; HTTP transport and structured output land in P1.1.c
+and P1.1.d respectively.
 
 Reuses the OAuth session of a logged-in ``codex`` CLI on the host so
 calls run under the user's ChatGPT subscription. Same compliance posture
 as ``AnthropicViaClaudeCLI``: subscription credentials are accessed via
-the official CLI's stored session, not via OAuth-token-extraction hacks.
+the official CLI's stored session, never via OAuth-token-extraction hacks.
 """
+
+from pathlib import Path
 
 from pydantic import BaseModel
 
+from caqrs.providers._cli_creds import load_codex_cli_cred
 from caqrs.providers.types import CompletionResult, Message
 
 
@@ -20,9 +23,19 @@ class OpenAIViaCodexCLI:
 
     provider_id: str
 
-    def __init__(self, *, model: str = "gpt-5.5-codex") -> None:
+    def __init__(
+        self,
+        *,
+        model: str = "gpt-5.5-codex",
+        codex_home: Path | None = None,
+    ) -> None:
         self.provider_id = f"codex-cli/{model}"
         self._model = model
+        self._codex_home = codex_home
+
+    def is_configured(self) -> bool:
+        """True iff a valid Codex CLI cred is reachable (file or Keychain)."""
+        return load_codex_cli_cred(self._codex_home) is not None
 
     async def complete[T: BaseModel](
         self,
@@ -32,9 +45,8 @@ class OpenAIViaCodexCLI:
         max_output_tokens: int,
         temperature: float = 0.0,
     ) -> CompletionResult[T]:
-        del messages, schema, max_output_tokens, temperature  # P1.0 stub
+        del messages, schema, max_output_tokens, temperature  # P1.1.b stub
         raise NotImplementedError(
-            "OpenAIViaCodexCLI: OAuth session reuse from local Codex CLI "
-            "lands in P1.1 (port from OpenClaw extensions/codex/). "
+            "OpenAIViaCodexCLI: HTTP transport lands in P1.1.c. "
             "Use OpenAICompatProvider with a LiteLLM gateway in the meantime.",
         )
