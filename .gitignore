@@ -32,8 +32,9 @@ coverage.xml
 # OS
 .DS_Store
 
-# Project local data
-data/
+# Project local data — runtime caches, not the in-tree caqrs.data package
+/data/
+!src/caqrs/data/
 artifacts/runs/
 *.parquet
 *.sqlite
