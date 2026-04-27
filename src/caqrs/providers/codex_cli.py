@@ -42,7 +42,11 @@ from typing import Any, Final
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from caqrs.providers._cli_creds import load_codex_cli_cred
+from caqrs.providers._cli_creds import (
+    format_expiry_iso,
+    is_cred_fresh,
+    load_codex_cli_cred,
+)
 from caqrs.providers.errors import (
     AuthError,
     NetworkError,
@@ -95,6 +99,11 @@ class OpenAIViaCodexCLI:
         if cred is None:
             raise AuthError(
                 "Codex CLI not logged in; ~/.codex/auth.json missing.",
+            )
+        if not is_cred_fresh(cred):
+            raise AuthError(
+                f"Codex CLI cred expired at {format_expiry_iso(cred)}. "
+                "Run `codex login` to renew. Auto-refresh is out of scope per ADR-0003.",
             )
 
         tool = _schema_to_tool_def(schema)
