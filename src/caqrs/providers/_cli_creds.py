@@ -52,6 +52,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -71,6 +72,7 @@ _CLAUDE_KEYCHAIN_SERVICE: Final[str] = "Claude Code-credentials"
 _CODEX_KEYCHAIN_SERVICE: Final[str] = "Codex Auth"
 _KEYCHAIN_TIMEOUT_S: Final[float] = 5.0
 _CODEX_ACCOUNT_HASH_LEN: Final[int] = 16
+_DEFAULT_EXPIRY_SKEW_S: Final[int] = 60
 
 
 # === Cred types ===
@@ -104,6 +106,25 @@ class TokenCredential(BaseModel):
 CliCredential = OAuthCredential | TokenCredential
 
 KeychainReader = Callable[[str, str | None], str | None]
+
+
+# === Expiry helpers (auto-refresh out of scope per ADR-0003) ===
+
+
+def is_cred_fresh(cred: CliCredential, *, skew_seconds: int = _DEFAULT_EXPIRY_SKEW_S) -> bool:
+    """True iff the cred has not yet expired, with a small safety margin.
+
+    The margin protects against tokens that expire mid-request: a 60-second
+    skew means we treat anything within the next minute as already expired
+    so the upstream API does not fail the in-flight call.
+    """
+    now_ms = int(time.time() * 1000)
+    return cred.expires_at_ms > now_ms + skew_seconds * 1000
+
+
+def format_expiry_iso(cred: CliCredential) -> str:
+    """Format ``expires_at_ms`` as a UTC ISO 8601 string for error messages."""
+    return datetime.fromtimestamp(cred.expires_at_ms / 1000, tz=UTC).isoformat()
 
 
 # === Path resolution ===

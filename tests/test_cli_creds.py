@@ -6,6 +6,7 @@ All tests use ``tmp_path`` fixtures and never read the user's real
 
 import base64
 import json
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,6 +19,8 @@ from caqrs.providers._cli_creds import (
     _resolve_codex_expiry_ms,
     claude_cli_creds_path,
     codex_cli_creds_path,
+    format_expiry_iso,
+    is_cred_fresh,
     load_claude_cli_cred,
     load_codex_cli_cred,
 )
@@ -251,3 +254,36 @@ def test_load_codex_returns_none_for_malformed_json(tmp_path: Path) -> None:
     codex_home.mkdir(parents=True, exist_ok=True)
     (codex_home / "auth.json").write_text("garbage {{", encoding="utf-8")
     assert load_codex_cli_cred(codex_home) is None
+
+
+# === Expiry helpers ===
+
+
+def _token_cred(expires_at_ms: int) -> TokenCredential:
+    return TokenCredential(
+        provider="anthropic",
+        access_token="t",
+        expires_at_ms=expires_at_ms,
+    )
+
+
+def test_is_cred_fresh_with_far_future_expiry() -> None:
+    future = int((time.time() + 3600) * 1000)
+    assert is_cred_fresh(_token_cred(future)) is True
+
+
+def test_is_cred_fresh_rejects_past_expiry() -> None:
+    assert is_cred_fresh(_token_cred(1)) is False
+
+
+def test_is_cred_fresh_skew_treats_near_expiry_as_stale() -> None:
+    soon = int((time.time() + 30) * 1000)
+    assert is_cred_fresh(_token_cred(soon)) is False
+    assert is_cred_fresh(_token_cred(soon), skew_seconds=10) is True
+
+
+def test_format_expiry_iso_renders_utc() -> None:
+    cred = _token_cred(1_730_000_000_000)
+    formatted = format_expiry_iso(cred)
+    assert "+00:00" in formatted
+    assert "T" in formatted

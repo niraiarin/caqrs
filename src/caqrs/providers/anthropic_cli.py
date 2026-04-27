@@ -35,7 +35,11 @@ from typing import Any, Final
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from caqrs.providers._cli_creds import load_claude_cli_cred
+from caqrs.providers._cli_creds import (
+    format_expiry_iso,
+    is_cred_fresh,
+    load_claude_cli_cred,
+)
 from caqrs.providers.errors import (
     AuthError,
     NetworkError,
@@ -100,6 +104,11 @@ class AnthropicViaClaudeCLI:
         if cred is None:
             raise AuthError(
                 "Claude CLI not logged in; ~/.claude/.credentials.json missing.",
+            )
+        if not is_cred_fresh(cred):
+            raise AuthError(
+                f"Claude CLI cred expired at {format_expiry_iso(cred)}. "
+                "Run `claude login` to renew. Auto-refresh is out of scope per ADR-0003.",
             )
 
         tool = _schema_to_tool_def(schema)
