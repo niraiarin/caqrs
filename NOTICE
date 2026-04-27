@@ -1,0 +1,10 @@
+CAQRS — Constrained Agentic Quant Research System
+Copyright 2026 niraiarin
+
+Licensed under the Apache License, Version 2.0 (the "License").
+You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
+Design ideas (permission gateway, agentic loop transparency, second-brain
+memory) are referenced from Mercury (a personal-assistant agent by the same
+author). No code is copied from Mercury; see docs/lineage.md for the audit
+trail.
