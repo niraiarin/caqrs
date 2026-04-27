@@ -17,6 +17,10 @@ P1.4.c — :class:`CycleRunner` composes the primitives above with the
 five typed agents into one ``run(observer_input) -> CycleResult``
 entry point. Backtest is supplied as an injected callable so P1
 ships without the P2 backtest engine.
+
+P1.4.d-mini — :class:`CycleQueue` serial dispatcher with reentrancy
+guard, so concurrent enqueues are safe but cycles execute one at a
+time.
 """
 
 from caqrs.orchestrator.budget import (
@@ -25,6 +29,7 @@ from caqrs.orchestrator.budget import (
     BudgetStatusKind,
     CycleBudget,
 )
+from caqrs.orchestrator.cycle_queue import CycleQueue
 from caqrs.orchestrator.cycle_runner import (
     BacktestExecutor,
     CycleArtifacts,
@@ -72,6 +77,7 @@ __all__ = [
     "CycleBudget",
     "CycleEvent",
     "CycleEventKind",
+    "CycleQueue",
     "CycleResult",
     "CycleRunner",
     "EventLog",
