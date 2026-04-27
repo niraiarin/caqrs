@@ -21,6 +21,11 @@ ships without the P2 backtest engine.
 P1.4.d-mini — :class:`CycleQueue` serial dispatcher with reentrancy
 guard, so concurrent enqueues are safe but cycles execute one at a
 time.
+
+P1.4.d-full — :class:`Heartbeat` interval-based fire tracker. Pure
+object; caller polls ``is_due()`` and calls ``fire()`` after
+enqueuing a cycle. No threads, no cron dep — composes with
+:class:`CycleQueue` in the caller's event loop.
 """
 
 from caqrs.orchestrator.budget import (
@@ -52,6 +57,7 @@ from caqrs.orchestrator.events import (
     new_event_id,
     state_transition_event,
 )
+from caqrs.orchestrator.heartbeat import Heartbeat
 from caqrs.orchestrator.loop_detector import (
     CallRecord,
     LoopDetection,
@@ -81,6 +87,7 @@ __all__ = [
     "CycleResult",
     "CycleRunner",
     "EventLog",
+    "Heartbeat",
     "LoopDetection",
     "OrchestratorState",
     "OrchestratorStateMachine",
