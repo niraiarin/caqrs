@@ -23,7 +23,11 @@ settings.register_profile(
     verbosity=Verbosity.normal,
 )
 
-settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
+# dotenv tooling (e.g. dotenvx) injects empty strings for blank lines in
+# .env, which os.environ.get treats as set; coalesce empty/whitespace to
+# the default profile so a placeholder env file does not break test
+# collection.
+settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "").strip() or "dev")
 
 
 @pytest.fixture(autouse=True)
