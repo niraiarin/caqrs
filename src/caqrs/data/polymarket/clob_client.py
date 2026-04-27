@@ -215,9 +215,7 @@ class PolymarketClobClient:
 
         if response.status_code != _HTTP_OK:
             body = response.text[:_HTTP_BAD_REQUEST_LIMIT]
-            msg = (
-                f"Polymarket returned {response.status_code} for {path}: {body}"
-            )
+            msg = f"Polymarket returned {response.status_code} for {path}: {body}"
             raise PolymarketError(message=msg, status_code=response.status_code)
 
         try:
@@ -301,9 +299,7 @@ def _parse_orderbook_levels(raw: Any, *, side: str) -> tuple[OrderbookLevel, ...
 
 def _parse_orderbook(body: Mapping[str, Any]) -> Orderbook:
     last_trade_raw = body.get("last_trade_price")
-    last_trade = (
-        _to_decimal(last_trade_raw, field="last_trade_price") if last_trade_raw else None
-    )
+    last_trade = _to_decimal(last_trade_raw, field="last_trade_price") if last_trade_raw else None
     return Orderbook(
         market=str(body.get("market", "")),
         asset_id=str(body.get("asset_id", "")),
