@@ -76,14 +76,22 @@ need no key.
 
 ### Try a live data source
 
-Polymarket implied probabilities are exposed via a public read-only API; no key required.
-The standalone smoke script discovers an active high-liquidity market and prints a
-typed snapshot:
+**Polymarket** implied probabilities are exposed via a public read-only API; no key
+required:
 
 ```bash
 uv run python scripts/live_smoke_polymarket.py
-# or pin to a specific market:
 uv run python scripts/live_smoke_polymarket.py --slug fed-cuts-2026
+# Hourly orderbook archive for backtesting (large parquet downloads):
+uv run python scripts/live_smoke_polymarket_archive.py
+```
+
+**J-Quants** (JPX-official Japan equities) needs a free-tier API key — sign up at
+[jpx-jquants.com](https://jpx-jquants.com/) and put it in `.env`:
+
+```bash
+dotenvx run -- uv run python scripts/live_smoke_jquants.py
+dotenvx run -- uv run python scripts/live_smoke_jquants_observer.py --code 13010 --code 72030
 ```
 
 For the full LLM pipeline against a LiteLLM gateway, see `scripts/live_smoke_observer.py`.
@@ -104,7 +112,9 @@ src/caqrs/
 ├── providers/      # Anthropic CLI, Codex CLI, OpenAI-compatible, registry,
 │                   # subscription credential loaders (OpenClaw-derived)
 ├── data/           # external read-only data sources for the Observer
-│                   # polymarket/ (CLOB + Gamma clients + Observer signal helper)
+│                   # polymarket/         (CLOB + Gamma clients + signal helper)
+│                   # polymarket_archive/ (hourly Parquet from archive.pmxt.dev)
+│                   # jquants/            (JPX-official daily OHLCV + master + signal helper)
 └── py.typed        # PEP 561 marker
 
 tests/              # pytest + hypothesis; respx-mocked HTTP; live/ gated by CAQRS_LIVE=1
@@ -169,9 +179,10 @@ periodically (e.g. once per day) with a 30-day cutoff.
 | P1.3      | Memory: archive + auto-persist + episodic prune                | ✅ a + b + c            |
 | P1.4      | Orchestrator (events, budget, runner, queue, heartbeat)        | ✅ a + b + c + d-mini + d-full |
 | P1.5      | Live LLM smoke test (Observer)                                 | ✅                      |
-| P1.6      | Polymarket data source + Observer / Hypothesis integration     | ✅ a–g                  |
+| P1.6      | Polymarket data source + Observer / Hypothesis integration     | ✅ a–h (incl. archive)  |
 | P1.7      | README refresh                                                 | ✅                      |
 | P1.8      | Full-cycle live smoke test (LLM + Polymarket end-to-end)       | ✅                      |
+| P1.11     | J-Quants data source + Observer integration                    | ✅ a + b                |
 | P2        | Walk-forward backtest engine (vectorbt) replacing the stub     | —                       |
 | P3        | Policy Gateway + paper broker + asset/loss-limit projections   | —                       |
 | P4        | Live broker adapter (gated by human approval)                  | —                       |
