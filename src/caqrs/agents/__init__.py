@@ -5,10 +5,13 @@ P1.2.b added per-agent prompt assembly (`prompts/`).
 P1.2.c adds ``LLMAgent`` — convenience base for LLM-backed agents.
 P1.2.d-2 adds the five concrete agents that traverse a research
 cycle: Observer, Hypothesis, Skeptic, Research, Auditor.
+P1.2.d-3 adds the Decider — emits a typed StrategyDecision when
+the audit passes.
 """
 
 from caqrs.agents.auditor import AuditorAgent, AuditorInput
 from caqrs.agents.base_llm_agent import LLMAgent
+from caqrs.agents.decider import DeciderAgent, DeciderInput
 from caqrs.agents.hypothesis import HypothesisAgent
 from caqrs.agents.observer import ObserverAgent
 from caqrs.agents.protocol import Agent, AgentResult
@@ -20,6 +23,8 @@ __all__ = [
     "AgentResult",
     "AuditorAgent",
     "AuditorInput",
+    "DeciderAgent",
+    "DeciderInput",
     "HypothesisAgent",
     "LLMAgent",
     "ObserverAgent",

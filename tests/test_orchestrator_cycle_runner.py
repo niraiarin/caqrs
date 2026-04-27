@@ -13,6 +13,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from caqrs.agents.auditor import AuditorInput
+from caqrs.agents.decider import DeciderInput
 from caqrs.agents.protocol import AgentResult
 from caqrs.agents.research import ResearchInput
 from caqrs.memory import CycleStore
@@ -33,6 +34,12 @@ from caqrs.schemas.backtest_report import (
     FoldMetrics,
 )
 from caqrs.schemas.common import RunMetadata, new_run_id
+from caqrs.schemas.decision import (
+    DecisionAction,
+    Side,
+    StrategyDecision,
+    TargetPosition,
+)
 from caqrs.schemas.hypothesis_card import (
     AcceptanceCriterion,
     Direction,
@@ -196,6 +203,7 @@ def _audit_report(
     *,
     hypothesis_run_id: str,
     backtest_run_id: str,
+    verdict: AuditVerdict = AuditVerdict.PASS,
     token_in: int = 10,
     token_out: int = 5,
 ) -> AuditReport:
@@ -203,17 +211,41 @@ def _audit_report(
         metadata=_meta(agent="auditor", token_in=token_in, token_out=token_out),
         hypothesis_run_id=hypothesis_run_id,
         backtest_run_id=backtest_run_id,
-        verdict=AuditVerdict.PASS,
+        verdict=verdict,
         checks=(
             AcceptanceCheck(
                 metric_path="aggregate.median_sharpe",
                 op=">",
                 threshold=Decimal("0.5"),
                 actual=Decimal("1.2"),
-                passed=True,
+                passed=verdict is AuditVerdict.PASS,
             ),
         ),
-        rationale="All criteria met.",
+        rationale="All criteria met." if verdict is AuditVerdict.PASS else "criteria fail.",
+    )
+
+
+def _strategy_decision(
+    *,
+    backtest_run_id: str,
+    action: DecisionAction = DecisionAction.ADOPT,
+    token_in: int = 10,
+    token_out: int = 5,
+) -> StrategyDecision:
+    targets: tuple[TargetPosition, ...] = (
+        (TargetPosition(ticker="AAPL", side=Side.BUY, weight=Decimal("0.5")),)
+        if action is DecisionAction.ADOPT
+        else ()
+    )
+    return StrategyDecision(
+        metadata=_meta(agent="decider", token_in=token_in, token_out=token_out),
+        backtest_run_id=backtest_run_id,
+        action=action,
+        targets=targets,
+        rationale="reasonable risk-adjusted return.",
+        notional_cap_usd=Decimal("10000"),
+        max_position_weight=Decimal("0.5"),
+        daily_loss_limit_usd=Decimal("500"),
     )
 
 
@@ -261,6 +293,7 @@ def _build_runner(
     skeptic_verdict: SkepticVerdict = SkepticVerdict.PROCEED,
     research_plan: ResearchPlan | None = None,
     audit_report: AuditReport | None = None,
+    decision: StrategyDecision | None = None,
     observer_error: str | None = None,
     backtest_executor: Callable[[ResearchPlan], Awaitable[BacktestReport]] | None = None,
     event_log: EventLog | None = None,
@@ -283,10 +316,12 @@ def _build_runner(
         lambda plan: _async_return(_backtest_report(plan_run_id=plan.metadata.run_id))
     )
 
+    backtest_run_id = _meta(agent="backtest").run_id
     audit = audit_report or _audit_report(
         hypothesis_run_id=hyp.metadata.run_id,
-        backtest_run_id=_meta(agent="backtest").run_id,
+        backtest_run_id=backtest_run_id,
     )
+    decision_artifact = decision or _strategy_decision(backtest_run_id=backtest_run_id)
 
     bg = budget or CycleBudget(
         cycle_id=new_cycle_id(),
@@ -301,6 +336,10 @@ def _build_runner(
         skeptic=_StubAgent(name="skeptic", result=_ok_result(sk, agent="skeptic")),
         research=_StubAgent(name="research", result=_ok_result(rp, agent="research")),
         auditor=_StubAgent(name="auditor", result=_ok_result(audit, agent="auditor")),
+        decider=_StubAgent(
+            name="decider",
+            result=_ok_result(decision_artifact, agent="decider"),
+        ),
         backtest_executor=bt_executor,
         event_log=log,
         budget=bg,
@@ -324,13 +363,14 @@ async def test_runner_completes_full_pipeline() -> None:
 
     assert isinstance(result, CycleResult)
     assert result.aborted_reason is None
-    assert result.terminal_state is OrchestratorState.AUDITING
+    assert result.terminal_state is OrchestratorState.DECIDING
     assert result.artifacts.observer is not None
     assert result.artifacts.hypothesis is not None
     assert result.artifacts.skeptic is not None
     assert result.artifacts.research is not None
     assert result.artifacts.backtest is not None
     assert result.artifacts.audit is not None
+    assert result.artifacts.decision is not None
 
 
 @pytest.mark.asyncio
@@ -345,7 +385,7 @@ async def test_runner_emits_cycle_started_and_completed() -> None:
     assert len(started) == 1
     assert len(completed) == 1
     assert len(aborted) == 0
-    assert completed[0].payload["terminal_state"] == "auditing"
+    assert completed[0].payload["terminal_state"] == "deciding"
 
 
 @pytest.mark.asyncio
@@ -353,9 +393,9 @@ async def test_runner_emits_one_invoked_per_agent() -> None:
     log = EventLog()
     await _build_runner(event_log=log).run(_observer_input())
     invoked = log.filter_by_kind(CycleEventKind.AGENT_INVOKED)
-    assert len(invoked) == 5
+    assert len(invoked) == 6
     names = [e.payload["agent_name"] for e in invoked]
-    assert names == ["observer", "hypothesis", "skeptic", "research", "auditor"]
+    assert names == ["observer", "hypothesis", "skeptic", "research", "auditor", "decider"]
 
 
 @pytest.mark.asyncio
@@ -370,7 +410,8 @@ async def test_runner_emits_state_transitions_in_order() -> None:
         ("hypothesizing", "scrutinizing"),
         ("scrutinizing", "researching"),
         ("researching", "auditing"),
-        ("auditing", "idle"),
+        ("auditing", "deciding"),
+        ("deciding", "idle"),
     ]
 
 
@@ -379,9 +420,9 @@ async def test_runner_aggregates_token_usage_in_cycle_completed() -> None:
     log = EventLog()
     await _build_runner(event_log=log).run(_observer_input())
     completed = log.filter_by_kind(CycleEventKind.CYCLE_COMPLETED)[0]
-    # 5 agents x (10 in + 5 out) = 75
-    assert completed.payload["total_token_in"] == 50
-    assert completed.payload["total_token_out"] == 25
+    # 6 agents x (10 in + 5 out) = 90
+    assert completed.payload["total_token_in"] == 60
+    assert completed.payload["total_token_out"] == 30
 
 
 # === Skeptic kill (normal early termination) ===
@@ -532,6 +573,13 @@ async def test_runner_supplies_skeptic_with_hypothesis_card() -> None:
         skeptic=_CapturingSkeptic(),
         research=_StubAgent(name="research", result=_ok_result(research, agent="research")),
         auditor=_StubAgent(name="auditor", result=_ok_result(audit, agent="auditor")),
+        decider=_StubAgent(
+            name="decider",
+            result=_ok_result(
+                _strategy_decision(backtest_run_id=_meta(agent="backtest").run_id),
+                agent="decider",
+            ),
+        ),
         backtest_executor=lambda plan: _async_return(
             _backtest_report(plan_run_id=plan.metadata.run_id),
         ),
@@ -577,6 +625,13 @@ async def test_runner_research_input_carries_skeptic_report() -> None:
         skeptic=_StubAgent(name="skeptic", result=_ok_result(sk, agent="skeptic")),
         research=_CapturingResearch(),
         auditor=_StubAgent(name="auditor", result=_ok_result(audit, agent="auditor")),
+        decider=_StubAgent(
+            name="decider",
+            result=_ok_result(
+                _strategy_decision(backtest_run_id=_meta(agent="backtest").run_id),
+                agent="decider",
+            ),
+        ),
         backtest_executor=lambda plan: _async_return(
             _backtest_report(plan_run_id=plan.metadata.run_id),
         ),
@@ -623,6 +678,13 @@ async def test_runner_auditor_input_carries_backtest() -> None:
         skeptic=_StubAgent(name="skeptic", result=_ok_result(sk, agent="skeptic")),
         research=_StubAgent(name="research", result=_ok_result(rp, agent="research")),
         auditor=_CapturingAuditor(),
+        decider=_StubAgent(
+            name="decider",
+            result=_ok_result(
+                _strategy_decision(backtest_run_id=_meta(agent="backtest").run_id),
+                agent="decider",
+            ),
+        ),
         backtest_executor=lambda plan: _async_return(
             _backtest_report(plan_run_id=plan.metadata.run_id),
         ),
@@ -716,3 +778,99 @@ async def test_real_cycle_store_round_trips_via_auto_persist(tmp_path: object) -
     loaded_result, loaded_events = store.load(result.cycle_id)
     assert loaded_result == result
     assert len(loaded_events) == len(log.filter_by_cycle(result.cycle_id))
+
+
+# === Decider routing ===
+
+
+@pytest.mark.asyncio
+async def test_audit_fail_skips_decider() -> None:
+    """A FAIL audit terminates at AUDITING without invoking the Decider."""
+    hyp = _hypothesis_card()
+    backtest_run_id = _meta(agent="backtest").run_id
+    failing_audit = _audit_report(
+        hypothesis_run_id=hyp.metadata.run_id,
+        backtest_run_id=backtest_run_id,
+        verdict=AuditVerdict.FAIL,
+    )
+    log = EventLog()
+    runner = _build_runner(
+        hypothesis_card=hyp,
+        audit_report=failing_audit,
+        event_log=log,
+    )
+    result = await runner.run(_observer_input())
+    assert result.aborted_reason is None
+    assert result.terminal_state is OrchestratorState.AUDITING
+    assert result.artifacts.audit is not None
+    assert result.artifacts.decision is None
+
+    invoked_names = [
+        e.payload["agent_name"] for e in log.filter_by_kind(CycleEventKind.AGENT_INVOKED)
+    ]
+    assert "decider" not in invoked_names
+
+
+@pytest.mark.asyncio
+async def test_decider_input_carries_audit_and_backtest() -> None:
+    captured: list[DeciderInput] = []
+
+    class _CapturingDecider:
+        name = "decider"
+
+        async def run(self, payload: DeciderInput, /) -> AgentResult[StrategyDecision]:
+            captured.append(payload)
+            return _ok_result(
+                _strategy_decision(backtest_run_id=payload.backtest.metadata.run_id),
+                agent="decider",
+            )
+
+    obs = _observer_artifact()
+    hyp = _hypothesis_card()
+    sk = _skeptic_report(
+        verdict=SkepticVerdict.PROCEED,
+        hypothesis_run_id=hyp.metadata.run_id,
+    )
+    rp = _research_plan(hypothesis_run_id=hyp.metadata.run_id)
+    audit = _audit_report(
+        hypothesis_run_id=hyp.metadata.run_id,
+        backtest_run_id=_meta(agent="backtest").run_id,
+    )
+    runner = CycleRunner(
+        observer=_StubAgent(name="observer", result=_ok_result(obs, agent="observer")),
+        hypothesis=_StubAgent(name="hypothesis", result=_ok_result(hyp, agent="hypothesis")),
+        skeptic=_StubAgent(name="skeptic", result=_ok_result(sk, agent="skeptic")),
+        research=_StubAgent(name="research", result=_ok_result(rp, agent="research")),
+        auditor=_StubAgent(name="auditor", result=_ok_result(audit, agent="auditor")),
+        decider=_CapturingDecider(),
+        backtest_executor=lambda plan: _async_return(
+            _backtest_report(plan_run_id=plan.metadata.run_id),
+        ),
+        event_log=EventLog(),
+        budget=CycleBudget(
+            cycle_id=new_cycle_id(),
+            token_cap=10_000,
+            wallclock_seconds_cap=60.0,
+        ),
+    )
+    await runner.run(_observer_input())
+    assert len(captured) == 1
+    assert captured[0].hypothesis.metadata.run_id == hyp.metadata.run_id
+    assert captured[0].audit.metadata.run_id == audit.metadata.run_id
+
+
+@pytest.mark.asyncio
+async def test_decider_decision_action_can_be_reject() -> None:
+    """A REJECT action still completes the cycle normally; decision artifact is recorded."""
+    hyp = _hypothesis_card()
+    backtest_run_id = _meta(agent="backtest").run_id
+    rejected = _strategy_decision(
+        backtest_run_id=backtest_run_id,
+        action=DecisionAction.REJECT,
+    )
+    runner = _build_runner(hypothesis_card=hyp, decision=rejected)
+    result = await runner.run(_observer_input())
+    assert result.aborted_reason is None
+    assert result.terminal_state is OrchestratorState.DECIDING
+    assert result.artifacts.decision is not None
+    assert result.artifacts.decision.action is DecisionAction.REJECT
