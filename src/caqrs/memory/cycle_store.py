@@ -121,6 +121,60 @@ class CycleStore:
             entries.append(CycleIndexEntry.model_validate_json(stripped))
         return tuple(entries)
 
+    def prune_older_than(self, cutoff: datetime) -> tuple[str, ...]:
+        """Drop cycles whose latest ``ended_at`` precedes ``cutoff``.
+
+        Returns the cycle ids removed in the order they were saved. The
+        per-cycle directories are deleted and ``index.jsonl`` is
+        rewritten atomically to drop *every* index row referencing those
+        ids (a re-saved cycle has multiple rows; all go).
+        """
+        entries = self.index_entries()
+        if not entries:
+            return ()
+
+        latest_end_per_cycle: dict[str, datetime] = {}
+        for entry in entries:
+            current = latest_end_per_cycle.get(entry.cycle_id)
+            if current is None or entry.ended_at > current:
+                latest_end_per_cycle[entry.cycle_id] = entry.ended_at
+
+        pruned: list[str] = []
+        for entry in entries:
+            if entry.cycle_id in pruned:
+                continue
+            if latest_end_per_cycle[entry.cycle_id] < cutoff:
+                pruned.append(entry.cycle_id)
+
+        if not pruned:
+            return ()
+
+        for cycle_id in pruned:
+            self._remove_cycle_dir(cycle_id)
+
+        survivors = tuple(e for e in entries if e.cycle_id not in set(pruned))
+        self._rewrite_index(survivors)
+        return tuple(pruned)
+
+    def _remove_cycle_dir(self, cycle_id: str) -> None:
+        cycle_dir = self._cycles_dir / cycle_id
+        if not cycle_dir.exists():
+            return
+        # CycleStore writes only result.json + events.jsonl; deleting
+        # those files plus the directory keeps the operation defensive
+        # (no rmtree on directories we did not author).
+        for child in cycle_dir.iterdir():
+            child.unlink()
+        cycle_dir.rmdir()
+
+    def _rewrite_index(self, survivors: tuple[CycleIndexEntry, ...]) -> None:
+        if not survivors:
+            if self._index_path.exists():
+                self._index_path.unlink()
+            return
+        content = "\n".join(entry.model_dump_json() for entry in survivors) + "\n"
+        _atomic_write_text(self._index_path, content)
+
 
 def _atomic_write_text(path: Path, content: str) -> None:
     """Write ``content`` to ``path`` via a tmp+rename so a crash leaves
