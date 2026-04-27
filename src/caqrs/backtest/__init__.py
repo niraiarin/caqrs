@@ -1,0 +1,19 @@
+"""Walk-forward backtest engine.
+
+P2.a — :func:`run_walk_forward` consumes a :class:`ResearchPlan`
+plus pre-computed price and signal :class:`polars.DataFrame` inputs
+and returns a :class:`BacktestReport`. Pure function; no I/O. The
+caller wires whichever data source (e.g. :mod:`caqrs.data.jquants`)
+and signal logic suits the strategy.
+
+Subsequent slices add convenience factories that compose the engine
+with a price provider + signal provider into a one-call
+:data:`BacktestExecutor` plug-in for :class:`CycleRunner`.
+
+Polars is required for this subpackage (already pulled in via the
+``archive`` extras / dev group).
+"""
+
+from caqrs.backtest.engine import run_walk_forward
+
+__all__ = ["run_walk_forward"]
