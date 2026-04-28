@@ -20,11 +20,17 @@ from caqrs.policy.gateway import (
     PolicyViolationKind,
     apply_policy_gateway,
 )
+from caqrs.policy.loss_budget_tracker import (
+    LossBudgetTracker,
+    RealizedPnLSource,
+)
 
 __all__ = [
     "FeasibleAction",
+    "LossBudgetTracker",
     "PolicyGatewayConfig",
     "PolicyViolation",
     "PolicyViolationKind",
+    "RealizedPnLSource",
     "apply_policy_gateway",
 ]
