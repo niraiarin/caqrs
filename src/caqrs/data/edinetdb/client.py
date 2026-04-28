@@ -1,5 +1,11 @@
 """Async httpx client for EDINET DB (edinetdb.jp) v1.
 
+⚠️  **Free plan: 100 requests / day** (hard daily quota). The
+``throttle_seconds`` ctor arg only paces the per-second rate; the
+daily budget is independent. At default 0.1 s pacing a tight loop
+exhausts the day's quota in ~10 seconds. See module docstring for
+the cache + prefetch pattern this client expects callers to follow.
+
 Endpoints exposed in this slice (P1.13.a):
 
 - :meth:`EdinetDbClient.list_companies` → ``GET /v1/companies``
@@ -13,8 +19,10 @@ Auth: ``X-API-Key`` HTTP header (the EDINET DB key has the format
 :meth:`from_env`.
 
 Throttle: default 0.1s (10 req/sec). EDINET DB does not publish a
-numeric rate limit, so the conservative interval matches the EDINET
-official-API client; callers can override.
+numeric per-second limit, so the conservative interval matches the
+EDINET official-API client; callers can override. The **daily**
+limit is a separate concern handled by caller-side caching — see
+the module docstring's prefetch guidance.
 """
 
 from __future__ import annotations

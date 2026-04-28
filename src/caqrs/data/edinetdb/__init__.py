@@ -1,6 +1,20 @@
 """EDINET DB (https://edinetdb.jp) — third-party hosted, structured-
 financial-data API over JFSA EDINET filings.
 
+⚠️  **Free plan rate limit: 100 requests / day** (as of 2026-04).
+   This is a hard daily quota distinct from any per-second throttle.
+   At the default 0.1 s throttle a careless caller exhausts the
+   day's budget in ~10 seconds. Plan accordingly:
+
+   - Cache aggressively. The `/companies` and `/financials` payloads
+     are stable for days at a time; serve repeated reads from a
+     local store (the yfinance `TTL SQLite cache` pattern in
+     :mod:`caqrs.data.yfinance.cache` is the model to follow when a
+     dedicated EDINET DB cache lands).
+   - Prefetch in bulk before a screening loop, never fetch
+     per-symbol inside a hot path.
+   - Treat 429 as a hard stop until the next UTC day boundary.
+
 This is **distinct** from :mod:`caqrs.data.edinet`, which targets the
 official JFSA gateway at ``api.edinet-fsa.go.jp`` and serves raw
 documents (XBRL zip / PDF / CSV). EDINET DB is a higher-level
