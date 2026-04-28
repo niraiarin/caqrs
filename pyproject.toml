@@ -28,6 +28,15 @@ dependencies = [
 # uv add --optional archive caqrs[archive].
 archive = ["polars>=1.0,<2"]
 
+# FastAPI + ASGI server for caqrs.api (auto-generated OpenAPI docs over
+# the existing Pydantic schemas). Install with: pip install caqrs[api]
+# or uv add --optional api caqrs[api]. Run with:
+#   uvicorn caqrs.api.app:app --reload
+api = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+]
+
 [project.urls]
 Homepage = "https://github.com/niraiarin/caqrs"
 Issues = "https://github.com/niraiarin/caqrs/issues"
@@ -51,6 +60,9 @@ dev = [
     # The archive adapter's unit + live tests need polars; keep it in dev
     # so `uv sync` pulls it in even without --extra archive.
     "polars>=1.0,<2",
+    # FastAPI + httpx-based TestClient for caqrs.api tests; keep in dev
+    # so `uv sync` pulls it in without --extra api.
+    "fastapi>=0.115,<1",
 ]
 
 # === ruff ===
