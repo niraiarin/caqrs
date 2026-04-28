@@ -124,6 +124,35 @@ PositionAggregator(broker_state) → (future) PolicyGatewayConfig.held_positions
 Each component is independently testable. The gateway stays pure even
 as the surrounding loop accumulates state.
 
+**Day-boundary semantics (binding for P3.d-3 LossBudgetTracker and any
+future per-day projection):**
+
+- **Trigger**: the **CycleRunner caller** owns the day-boundary
+  signal. The canonical pattern is calling
+  `tracker.mark_start_of_day(today, broker)` at cycle 0 of each
+  trading day. Neither the gateway, the tracker, nor the broker is
+  allowed to discover "today" on its own (no `datetime.now()` inside
+  any of them).
+- **Timezone**: `today` is a tz-aware `date` derived from the same
+  timezone the active `ResearchPlan` / `WalkForwardWindow` uses (UTC
+  by default; venues with a non-UTC trading calendar pass their own
+  `today` value).
+- **Tracker statelessness**: the same "no I/O / no clock / no
+  internal state beyond what was injected" rule that justifies a pure
+  gateway applies **recursively** to its caller-side projections. A
+  `LossBudgetTracker` may hold a single day-boundary baseline (a
+  `Decimal`) but does not retain references to broker state, does not
+  poll, and does not call `apply_policy_gateway` itself. It computes
+  `magnitude = max(0, baseline - source.realized_pnl_usd)` and
+  returns; the runner injects the result into a fresh
+  `PolicyGatewayConfig`.
+
+**Scope of "in-memory state" in Decision 1**: the prohibition applies
+to the gateway projection itself, not to the surrounding pipeline.
+Brokers, trackers, and aggregators are explicitly allowed to hold
+state — the rule is that `apply_policy_gateway` consumes their
+*output* via a per-call `PolicyGatewayConfig`, not their handles.
+
 ### Implications for P4 (live broker)
 
 P4 substitutes the live broker's account API for the paper broker's
