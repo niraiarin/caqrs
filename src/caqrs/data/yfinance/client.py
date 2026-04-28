@@ -26,6 +26,7 @@ import math
 import shutil
 import tempfile
 import time
+from collections.abc import Sequence
 from datetime import date as _date
 from datetime import timedelta
 from decimal import Decimal
@@ -35,10 +36,16 @@ from typing import Any
 
 import yfinance as yf
 
+from caqrs.data.yfinance.cache import (
+    DEFAULT_PRICES_TTL_SECONDS,
+    YFinanceCache,
+)
 from caqrs.data.yfinance.schemas import YFinancePrice
 
 _DEFAULT_THROTTLE_SECONDS = 1.0
 _QUOTA_EXHAUSTED_AFTER_CONSECUTIVE_EMPTIES = 3
+# Linear backoff per Zenn rakuscan article: 5s -> 10s -> 15s.
+_RETRY_BACKOFF_SCHEDULE: tuple[int, ...] = (5, 10, 15)
 
 
 class YFinanceError(Exception):
@@ -51,7 +58,20 @@ class YFinanceQuotaExhaustedError(YFinanceError):
     Distinct from ``YFinanceError`` so callers can apply a longer
     backoff (e.g. minutes) for this case while still retrying on
     transient failures.
+
+    When raised by :meth:`YFinanceClient.daily_bars_batch`, the
+    ``partial`` attribute carries the ``{symbol: bars}`` results
+    accumulated before the failure so the caller doesn't lose work.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        partial: dict[str, list[YFinancePrice]] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.partial: dict[str, list[YFinancePrice]] = partial or {}
 
 
 class YFinanceClient:
@@ -74,10 +94,14 @@ class YFinanceClient:
         self,
         *,
         throttle_seconds: float = _DEFAULT_THROTTLE_SECONDS,
+        cache: YFinanceCache | None = None,
+        cache_ttl_seconds: int = DEFAULT_PRICES_TTL_SECONDS,
     ) -> None:
         self._throttle = throttle_seconds
         self._last_call_at: float = 0.0
         self._consecutive_empties = 0
+        self._cache = cache
+        self._cache_ttl_seconds = cache_ttl_seconds
 
         # Per-process tz cache to avoid SQLite contention. Cleaned up
         # on aclose() / __aexit__. atexit fallback covers the case of
@@ -120,12 +144,21 @@ class YFinanceClient:
     ) -> list[YFinancePrice]:
         """Fetch daily OHLCV bars for ``[from_date, to_date]`` inclusive.
 
-        Returns ``[]`` for a single empty response (could be "no
-        trading days in range"). Raises
-        :class:`YFinanceQuotaExhaustedError` after 3 consecutive
-        empties — at that point the upstream is almost certainly
-        rate-limiting us.
+        When a :class:`YFinanceCache` is configured, hits the cache
+        first and writes successful fetches back. Returns ``[]`` for a
+        single empty response (could be "no trading days in range").
+        Raises :class:`YFinanceQuotaExhaustedError` after 3 consecutive
+        empties.
         """
+        if self._cache is not None:
+            cached = self._cache.get_bars(
+                symbol=symbol,
+                from_date=from_date,
+                to_date=to_date,
+            )
+            if cached is not None:
+                return list(cached)
+
         await self._throttle_sleep()
         # yfinance's `end` is exclusive; add one day so to_date is
         # included in the result.
@@ -148,9 +181,85 @@ class YFinanceClient:
             return []
 
         self._consecutive_empties = 0
-        return [
+        bars = [
             self._row_to_price(symbol=symbol, idx=idx, row=row) for idx, row in frame.iterrows()
         ]
+        if self._cache is not None and bars:
+            self._cache.set_bars(
+                symbol=symbol,
+                from_date=from_date,
+                to_date=to_date,
+                bars=bars,
+                ttl_seconds=self._cache_ttl_seconds,
+            )
+        return bars
+
+    async def daily_bars_with_retry(
+        self,
+        *,
+        symbol: str,
+        from_date: _date,
+        to_date: _date,
+    ) -> list[YFinancePrice]:
+        """Like :meth:`daily_bars` but retries up to 3 times on
+        :class:`YFinanceQuotaExhaustedError` with linear backoff
+        (5s → 10s → 15s) per Zenn rakuscan article.
+
+        The ``_consecutive_empties`` counter is **not** reset between
+        retries — a non-empty response from ``daily_bars`` itself
+        resets it (which then naturally returns the bars). Sustained
+        empties keep the counter above threshold so each retry raises
+        immediately, walks down the backoff schedule, and finally
+        re-raises after attempt 3.
+        """
+        last_error: YFinanceQuotaExhaustedError | None = None
+        for backoff in _RETRY_BACKOFF_SCHEDULE:
+            try:
+                return await self.daily_bars(
+                    symbol=symbol,
+                    from_date=from_date,
+                    to_date=to_date,
+                )
+            except YFinanceQuotaExhaustedError as exc:
+                last_error = exc
+                await asyncio.sleep(backoff)
+        # All attempts exhausted.
+        raise (
+            last_error
+            if last_error is not None
+            else YFinanceQuotaExhaustedError(
+                "exhausted retries with no recorded error",
+            )
+        )
+
+    async def daily_bars_batch(
+        self,
+        *,
+        symbols: Sequence[str],
+        from_date: _date,
+        to_date: _date,
+    ) -> dict[str, list[YFinancePrice]]:
+        """Fetch ``daily_bars`` for each symbol sequentially.
+
+        Throttle interval applies between calls (default 1s, per the
+        Zenn pitfalls "20 銘柄 / 1 秒間隔" pattern). On
+        :class:`YFinanceQuotaExhaustedError`, the partial dict
+        accumulated so far is attached to the exception's ``partial``
+        attribute and re-raised so the caller doesn't silently lose
+        work.
+        """
+        results: dict[str, list[YFinancePrice]] = {}
+        for symbol in symbols:
+            try:
+                results[symbol] = await self.daily_bars(
+                    symbol=symbol,
+                    from_date=from_date,
+                    to_date=to_date,
+                )
+            except YFinanceQuotaExhaustedError as exc:
+                exc.partial = results
+                raise
+        return results
 
     # === Internal ===
 
