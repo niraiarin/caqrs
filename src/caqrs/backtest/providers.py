@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, time, timedelta
 from datetime import date as _date
 from decimal import Decimal
-from typing import Protocol
+from typing import Literal, Protocol
 
 import polars as pl
 
@@ -32,6 +32,7 @@ from caqrs.schemas.research_plan import ResearchPlan
 BacktestExecutor = Callable[[ResearchPlan], Awaitable[BacktestReport]]
 
 _DEFAULT_NOTIONAL_USD = Decimal("1000000")
+_RankDirection = Literal["top", "bottom"]
 
 
 class PriceProvider(Protocol):
@@ -172,25 +173,25 @@ def make_jquants_buy_and_hold_executor(
     return _executor
 
 
-def momentum_signals(
+def _rank_signals(
     *,
     plan: ResearchPlan,
     prices: pl.DataFrame,
     lookback_days: int,
-    top_k: int | None = None,
+    k: int | None,
+    direction: _RankDirection,
+    k_param_name: str,
 ) -> pl.DataFrame:
-    """Cross-sectional momentum: rank by ``lookback_days`` past return,
-    long-equally-weight the top ``top_k`` tickers.
+    """Internal: rank tickers by ``lookback_days`` past return and select
+    the ``k`` highest (``direction="top"``, momentum) or ``k`` lowest
+    (``direction="bottom"``, mean reversion).
 
-    For each date with at least ``lookback_days`` of prior history,
-    compute each ticker's return relative to ``lookback_days`` rows
-    earlier and assign weight ``1 / top_k`` to the highest-ranked
-    ``top_k`` tickers. Days without enough history get zero weights
-    on every ticker (no position).
+    Days without enough history get zero weights on every ticker. Tickers
+    with missing data on either endpoint are sentineled so they never
+    enter the selection.
 
-    ``top_k=None`` defaults to ``len(plan.universe)``, in which case
-    every ticker is selected and the strategy degenerates to equal-
-    weight buy-and-hold rebalanced daily.
+    ``k=None`` defaults to ``len(plan.universe)``; in either direction
+    that degenerates to equal-weight buy-and-hold rebalanced daily.
     """
     if lookback_days <= 0:
         msg = f"lookback_days must be positive; got {lookback_days}"
@@ -198,15 +199,14 @@ def momentum_signals(
 
     universe = list(plan.universe)
     n = len(universe)
-    selected_k = top_k if top_k is not None else n
+    selected_k = k if k is not None else n
     if selected_k > n:
-        msg = f"top_k={top_k} exceeds universe size {n}"
+        msg = f"{k_param_name}={k} exceeds universe size {n}"
         raise ValueError(msg)
     if selected_k <= 0:
-        msg = f"top_k must be positive when set; got {top_k}"
+        msg = f"{k_param_name} must be positive when set; got {k}"
         raise ValueError(msg)
 
-    # Build a dense {date -> {ticker -> close}} table indexed by sorted dates.
     sorted_dates = sorted(set(prices["date"].to_list()))
     close_by_date: dict[object, dict[str, float]] = {d: {} for d in sorted_dates}
     for date_value, ticker, close in zip(
@@ -217,7 +217,10 @@ def momentum_signals(
     ):
         close_by_date[date_value][str(ticker)] = float(close)
 
-    weight = 1.0 / float(selected_k) if selected_k > 0 else 0.0
+    weight = 1.0 / float(selected_k)
+    # Sentinel for tickers with missing endpoint data: place them at the
+    # losing extreme regardless of direction so they're never selected.
+    sentinel = float("-inf") if direction == "top" else float("inf")
     out_rows: list[dict[str, object]] = []
     for i, day in enumerate(sorted_dates):
         if i < lookback_days:
@@ -235,11 +238,11 @@ def momentum_signals(
                     and ticker in prior_closes
                     and prior_closes[ticker] != 0
                 )
-                else float("-inf"),
+                else sentinel,
             )
             for ticker in universe
         ]
-        ranked.sort(key=lambda pair: pair[1], reverse=True)
+        ranked.sort(key=lambda pair: pair[1], reverse=(direction == "top"))
         winners = {t for t, _ in ranked[:selected_k]}
         out_rows.extend(
             {
@@ -261,22 +264,70 @@ def momentum_signals(
     return pl.DataFrame(out_rows)
 
 
-def make_jquants_momentum_executor(
+def momentum_signals(
+    *,
+    plan: ResearchPlan,
+    prices: pl.DataFrame,
+    lookback_days: int,
+    top_k: int | None = None,
+) -> pl.DataFrame:
+    """Cross-sectional momentum: rank by ``lookback_days`` past return,
+    long-equally-weight the top ``top_k`` tickers.
+
+    Days without enough history get zero weights on every ticker.
+    ``top_k=None`` defaults to ``len(plan.universe)``, which degenerates
+    to equal-weight buy-and-hold rebalanced daily.
+    """
+    return _rank_signals(
+        plan=plan,
+        prices=prices,
+        lookback_days=lookback_days,
+        k=top_k,
+        direction="top",
+        k_param_name="top_k",
+    )
+
+
+def mean_reversion_signals(
+    *,
+    plan: ResearchPlan,
+    prices: pl.DataFrame,
+    lookback_days: int,
+    bottom_k: int | None = None,
+) -> pl.DataFrame:
+    """Cross-sectional mean reversion: rank by ``lookback_days`` past
+    return ASC and long-equally-weight the worst-performing ``bottom_k``
+    tickers under the bet that they revert.
+
+    Symmetric in shape to :func:`momentum_signals` but selects the
+    bottom of the rank instead of the top. Days without enough history
+    get zero weights on every ticker. ``bottom_k=None`` defaults to
+    ``len(plan.universe)``, which degenerates to equal-weight
+    buy-and-hold rebalanced daily.
+    """
+    return _rank_signals(
+        plan=plan,
+        prices=prices,
+        lookback_days=lookback_days,
+        k=bottom_k,
+        direction="bottom",
+        k_param_name="bottom_k",
+    )
+
+
+def _make_rank_executor(
     *,
     client: JQuantsClient,
     lookback_days: int,
-    top_k: int | None = None,
-    notional_usd: Decimal = _DEFAULT_NOTIONAL_USD,
+    k: int | None,
+    direction: _RankDirection,
+    k_param_name: str,
+    notional_usd: Decimal,
 ) -> BacktestExecutor:
-    """Return a :data:`BacktestExecutor` that runs a top-K momentum
-    strategy over ``plan.universe`` using J-Quants prices.
-
-    Pre-fetches a calendar-day buffer of ``2 * lookback_days`` before
+    """Internal: shared executor builder for momentum + mean-reversion
+    factories. Pre-fetches a 2 * lookback_days calendar buffer before
     the earliest ``test_start`` so day-1 of the test window already
-    has a computable lookback return (J-Quants prices are weekly
-    sparse — weekends and holidays — so we over-allocate the buffer).
-
-    See :func:`momentum_signals` for the strategy semantics.
+    has a computable lookback return.
     """
     if lookback_days <= 0:
         msg = f"lookback_days must be positive; got {lookback_days}"
@@ -294,11 +345,13 @@ def make_jquants_momentum_executor(
             start=fetch_start,
             end=last_test_end,
         )
-        signals = momentum_signals(
+        signals = _rank_signals(
             plan=plan,
             prices=prices,
             lookback_days=lookback_days,
-            top_k=top_k,
+            k=k,
+            direction=direction,
+            k_param_name=k_param_name,
         )
         return run_walk_forward(
             plan=plan,
@@ -308,3 +361,47 @@ def make_jquants_momentum_executor(
         )
 
     return _executor
+
+
+def make_jquants_momentum_executor(
+    *,
+    client: JQuantsClient,
+    lookback_days: int,
+    top_k: int | None = None,
+    notional_usd: Decimal = _DEFAULT_NOTIONAL_USD,
+) -> BacktestExecutor:
+    """Return a :data:`BacktestExecutor` that runs a top-K momentum
+    strategy over ``plan.universe`` using J-Quants prices.
+
+    See :func:`momentum_signals` for the strategy semantics.
+    """
+    return _make_rank_executor(
+        client=client,
+        lookback_days=lookback_days,
+        k=top_k,
+        direction="top",
+        k_param_name="top_k",
+        notional_usd=notional_usd,
+    )
+
+
+def make_jquants_mean_reversion_executor(
+    *,
+    client: JQuantsClient,
+    lookback_days: int,
+    bottom_k: int | None = None,
+    notional_usd: Decimal = _DEFAULT_NOTIONAL_USD,
+) -> BacktestExecutor:
+    """Return a :data:`BacktestExecutor` that runs a bottom-K mean-
+    reversion strategy over ``plan.universe`` using J-Quants prices.
+
+    See :func:`mean_reversion_signals` for the strategy semantics.
+    """
+    return _make_rank_executor(
+        client=client,
+        lookback_days=lookback_days,
+        k=bottom_k,
+        direction="bottom",
+        k_param_name="bottom_k",
+        notional_usd=notional_usd,
+    )
