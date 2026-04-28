@@ -52,6 +52,18 @@ just typecheck
 just ci          # run everything CI runs
 ```
 
+When GitHub Actions is unavailable (billing limit, outage), reproduce the upstream
+matrix locally via `scripts/ci_local.sh`:
+
+```bash
+scripts/ci_local.sh             # active Python only (~2 s on a warm cache)
+scripts/ci_local.sh --matrix    # Python 3.12 + 3.13 (uv auto-installs)
+```
+
+The script runs the same four gates (`ruff format --check`, `ruff check`, `mypy`,
+`pytest --cov`) with `HYPOTHESIS_PROFILE=ci`. Paste its tail into the PR
+description as evidence when CI itself can't run, then `gh pr merge`.
+
 ### Configuring API keys
 
 Live tests and the standalone smoke scripts read secrets from the environment.
