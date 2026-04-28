@@ -13,18 +13,18 @@ prior run. The module-level `app` is convenient for `uvicorn
 caqrs.api.app:app --reload`.
 """
 
-from __future__ import annotations
+from typing import Annotated, Final
 
-from typing import Final
-
-from fastapi import FastAPI
-from pydantic import BaseModel, ConfigDict
+from fastapi import Depends, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from caqrs.execution.execution_report import ExecutionReport
 from caqrs.policy.gateway import (
     FeasibleAction,
     PolicyGatewayConfig,
     PolicyViolation,
+    apply_policy_gateway,
 )
 from caqrs.schemas.decision import StrategyDecision
 
@@ -43,6 +43,24 @@ class HealthResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     status: str
+
+
+class ApplyPolicyGatewayRequest(BaseModel):
+    """Body of ``POST /v1/policy-gateway/apply``.
+
+    The caller (a supervisor process or CycleRunner) supplies a
+    :class:`StrategyDecision` and the freshly-assembled
+    :class:`PolicyGatewayConfig` for this projection. The
+    ``daily_realized_loss_usd`` field of ``config`` is expected to come
+    from a :class:`caqrs.policy.LossBudgetTracker` reading the active
+    broker; this endpoint is stateless and does not run that tracker
+    itself.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    decision: StrategyDecision
+    config: PolicyGatewayConfig
 
 
 def build_app() -> FastAPI:
@@ -135,6 +153,46 @@ def build_app() -> FastAPI:
     )
     def _policy_violation_preview() -> PolicyViolation:
         raise NotImplementedError
+
+    # === Real projection endpoints ===
+
+    async def _parse_apply_body(request: Request) -> ApplyPolicyGatewayRequest:
+        # The internal Pydantic models (StrategyDecision,
+        # PolicyGatewayConfig) use strict=True so the cycle pipeline
+        # catches str-vs-Decimal bugs at LLM-output validation time.
+        # JSON has no Decimal type, so the HTTP boundary must use
+        # strict=False; the call-time override propagates to nested
+        # validators per Pydantic v2 semantics.
+        raw = await request.json()
+        try:
+            return ApplyPolicyGatewayRequest.model_validate(raw, strict=False)
+        except ValidationError as exc:
+            raise RequestValidationError(exc.errors()) from exc
+
+    @new_app.post(
+        "/v1/policy-gateway/apply",
+        response_model=FeasibleAction,
+        tags=["policy-gateway"],
+        summary="Apply the Policy Gateway projection",
+        description=(
+            "Pure-function projection `Π : StrategyDecision → "
+            "FeasibleAction` over caller-supplied account-level "
+            "constraints. The endpoint is stateless: every request is "
+            "evaluated against the supplied body alone, exactly "
+            "matching the in-process `apply_policy_gateway` semantics. "
+            "Per ADR-0005 §Decision 1, the projection is reproducible "
+            "from the inputs alone — replaying the same body always "
+            "returns the same FeasibleAction.\n\n"
+            "Request body shape: "
+            '`{"decision": StrategyDecision, "config": '
+            "PolicyGatewayConfig}`. See the schema-preview endpoints "
+            "under `/v1/schemas/` for field-level documentation."
+        ),
+    )
+    def apply_gateway(
+        body: Annotated[ApplyPolicyGatewayRequest, Depends(_parse_apply_body)],
+    ) -> FeasibleAction:
+        return apply_policy_gateway(decision=body.decision, config=body.config)
 
     return new_app
 
