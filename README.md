@@ -12,7 +12,11 @@ Observe → Hypothesize → Skeptic → Research → (Backtest) → Audit → De
 ```
 
 P0–P1 close the *research* loop only — execution is suppressed at the `StrategyDecision`
-boundary. Broker adapters arrive in P3 behind an explicit human-approval workflow.
+boundary. P2 ships the walk-forward backtest engine + J-Quants strategy library. P3
+projects each `StrategyDecision` through a Policy Gateway (notional / ticker / loss-budget
+constraints) into a `FeasibleAction`; the paper broker (P3.d, pending) consumes that
+action without touching real funds. Live broker adapters land in P4 behind an explicit
+human-approval workflow.
 
 ## Why a separate repo?
 
@@ -207,7 +211,7 @@ periodically (e.g. once per day) with a 30-day cutoff.
 | P1.8      | Full-cycle live smoke test (LLM + Polymarket end-to-end)       | ✅                      |
 | P1.11     | J-Quants data source + Observer integration                    | ✅ a + b                |
 | P2        | Walk-forward backtest engine + J-Quants strategy library       | ✅ a–e                  |
-| P3        | Policy Gateway + paper broker + asset/loss-limit projections   | —                       |
+| P3        | Policy Gateway + paper broker + asset/loss-limit projections   | ✅ a + b + c (d pending) |
 | P4        | Live broker adapter (gated by human approval)                  | —                       |
 
 ## License

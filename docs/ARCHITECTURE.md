@@ -32,12 +32,15 @@
              │ StrategyDecision
              ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Policy Gateway Π : Action → FeasibleAction (P3)                         │
+│ Policy Gateway Π : StrategyDecision → FeasibleAction (P3.a + b)         │
+│  - notional cap + ticker allow/deny lists                               │
+│  - daily loss-budget consumption (caller-supplied)                      │
+│  Demote-whole on any violation; never filter-partial.                   │
 └──────────┬──────────────────────────────────────────────────────────────┘
-           │
+           │ FeasibleAction
            ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Paper / Live Broker (P3 / P4, gated by human approval)                  │
+│ Paper Broker (P3.d, pending) → Live Broker (P4, gated by human)         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -157,15 +160,37 @@ The split between engine and templates keeps the engine source-agnostic (any
 a `2 × lookback_days` calendar buffer before the earliest test start so day-1
 signals already have a computable lookback return.
 
-## Policy Gateway position (P3)
+## Policy Gateway (P3)
 
-The gateway is **not** a wrapper over a broker SDK. It is a projection
-`Π : Action → FeasibleAction` applied to `StrategyDecision` artifacts before
-any broker adapter is reachable. Decisions that violate the projection are
-not "fixed" in place; they are emitted with `action=defer` and a violation
-report attached. The `StrategyDecision` schema already enforces baseline
-cash-only constraints (sum of weights ≤ 1, per-position weight ≤
-`max_position_weight`, no duplicate tickers) without yet binding to a broker.
+The gateway is **not** a wrapper over a broker SDK. It is a pure-function
+projection `Π : StrategyDecision → FeasibleAction` applied between the
+Decider and any broker adapter. Decisions that violate the projection are
+**never partially executed**: the gateway demotes the whole decision to
+`defer` (with `targets=()`) and attaches the full violation list, because
+silently dropping offending legs would distort the agent's intended risk
+profile (the rejected leg may be the hedge). Callers — agent or supervisor
+— re-emit a corrected decision instead of receiving a quietly-clipped one.
+
+The `StrategyDecision` schema already enforces baseline cash-only
+constraints (sum of weights ≤ 1, per-position weight ≤
+`max_position_weight`, no duplicate tickers) at construction time. The
+gateway adds the **account-level** layer the agent doesn't see:
+
+- **P3.a — notional cap + ticker allow/deny lists** (`PolicyGatewayConfig.account_notional_cap_usd`, `allowed_tickers`, `denied_tickers`).
+- **P3.b — daily loss-budget consumption** (`daily_realized_loss_usd`, demote when remaining ≤ 0).
+- **P3.c — wired into `CycleRunner`** via the optional `policy_gateway_config` ctor arg; emits a `POLICY_GATEWAY_APPLIED` event with violation count and final action.
+
+The gateway never **computes** account state (current realized loss,
+current positions, lot sizes). Callers — eventually a `LossBudgetTracker`
+reading paper-broker state, or a live broker's PnL feed — assemble a
+fresh `PolicyGatewayConfig` per cycle. This keeps the projection pure,
+deterministic, and trivially testable; new constraint classes (lot
+rounding, position aggregation, sector caps) extend the config + add a
+violation kind without touching the function signature.
+
+P3.d (pending) layers a paper broker behind the gateway so the full
+research → backtest → decide → project → execute loop runs end-to-end on
+recorded fills, without touching real funds.
 
 ## Graceful degradation
 
