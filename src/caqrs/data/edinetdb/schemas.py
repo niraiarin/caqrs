@@ -145,7 +145,10 @@ class EdinetDbPagination(StrictBaseModel):
     total: int | None = Field(default=None, ge=0)
 
 
-class _EdinetDbMeta(StrictBaseModel):
+class EdinetDbMeta(StrictBaseModel):
+    """``meta`` block returned by paginated endpoints — wraps
+    :class:`EdinetDbPagination` plus any future top-level metadata."""
+
     model_config = ConfigDict(
         frozen=True,
         extra="ignore",
@@ -169,4 +172,4 @@ class EdinetDbCompaniesList(StrictBaseModel):
     )
 
     data: tuple[EdinetDbCompany, ...]
-    meta: _EdinetDbMeta
+    meta: EdinetDbMeta
