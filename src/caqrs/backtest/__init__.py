@@ -21,7 +21,9 @@ from caqrs.backtest.providers import (
     PriceProvider,
     buy_and_hold_signals,
     make_jquants_buy_and_hold_executor,
+    make_jquants_mean_reversion_executor,
     make_jquants_momentum_executor,
+    mean_reversion_signals,
     momentum_signals,
 )
 
@@ -31,7 +33,9 @@ __all__ = [
     "PriceProvider",
     "buy_and_hold_signals",
     "make_jquants_buy_and_hold_executor",
+    "make_jquants_mean_reversion_executor",
     "make_jquants_momentum_executor",
+    "mean_reversion_signals",
     "momentum_signals",
     "run_walk_forward",
 ]
