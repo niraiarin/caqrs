@@ -49,6 +49,10 @@ from caqrs.data.edinetdb.client import (
     EdinetDbClient,
     EdinetDbError,
 )
+from caqrs.data.edinetdb.quota import (
+    DailyQuotaTracker,
+    EdinetDbQuotaExhaustedError,
+)
 from caqrs.data.edinetdb.schemas import (
     EdinetDbCompaniesList,
     EdinetDbCompany,
@@ -62,6 +66,7 @@ __all__ = [
     "DEFAULT_COMPANIES_TTL_SECONDS",
     "DEFAULT_FINANCIALS_TTL_SECONDS",
     "DEFAULT_RANKINGS_TTL_SECONDS",
+    "DailyQuotaTracker",
     "EdinetDbCache",
     "EdinetDbClient",
     "EdinetDbCompaniesList",
@@ -70,5 +75,6 @@ __all__ = [
     "EdinetDbFinancialPeriod",
     "EdinetDbMeta",
     "EdinetDbPagination",
+    "EdinetDbQuotaExhaustedError",
     "EdinetDbRoeRanking",
 ]

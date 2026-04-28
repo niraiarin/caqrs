@@ -41,6 +41,7 @@ from caqrs.data.edinetdb.cache import (
     DEFAULT_RANKINGS_TTL_SECONDS,
     EdinetDbCache,
 )
+from caqrs.data.edinetdb.quota import DailyQuotaTracker
 from caqrs.data.edinetdb.schemas import (
     EdinetDbCompaniesList,
     EdinetDbFinancialPeriod,
@@ -79,6 +80,7 @@ class EdinetDbClient:
         timeout: float = 30.0,
         base_url: str = _BASE_URL,
         cache: EdinetDbCache | None = None,
+        quota_tracker: DailyQuotaTracker | None = None,
     ) -> None:
         self._api_key = api_key
         self._throttle = throttle_seconds
@@ -86,6 +88,7 @@ class EdinetDbClient:
         self._client = httpx.AsyncClient(timeout=timeout)
         self._last_call_at: float = 0.0
         self._cache = cache
+        self._quota_tracker = quota_tracker
 
     @classmethod
     def from_env(
@@ -94,6 +97,7 @@ class EdinetDbClient:
         env_var: str = "EDINETDB_API_KEY",
         throttle_seconds: float = _DEFAULT_THROTTLE_SECONDS,
         cache: EdinetDbCache | None = None,
+        quota_tracker: DailyQuotaTracker | None = None,
     ) -> EdinetDbClient:
         key = os.environ.get(env_var, "").strip()
         if not key:
@@ -107,6 +111,7 @@ class EdinetDbClient:
             api_key=key,
             throttle_seconds=throttle_seconds,
             cache=cache,
+            quota_tracker=quota_tracker,
         )
 
     @property
@@ -229,6 +234,11 @@ class EdinetDbClient:
         *,
         params: dict[str, str],
     ) -> dict[str, Any]:
+        # Quota check happens before throttle so the caller fails fast
+        # without waiting on the per-second pacer.
+        if self._quota_tracker is not None:
+            self._quota_tracker.assert_quota_available()
+
         await self._throttle_sleep()
         try:
             resp = await self._client.get(
@@ -242,6 +252,12 @@ class EdinetDbClient:
 
         if resp.status_code != _HTTP_OK:
             self._raise_from_error_response(resp)
+
+        # Only count requests that actually completed successfully.
+        # Cache hits never reach this method, so they don't consume
+        # quota — that's the design intent: cache shields the budget.
+        if self._quota_tracker is not None:
+            self._quota_tracker.record_request()
 
         body: dict[str, Any] = resp.json()
         return body
