@@ -19,11 +19,14 @@ Quirks the client smooths over:
 - The orderbook ``timestamp`` field is a unix-seconds string;
   decoded to tz-aware UTC :class:`datetime`.
 
-Rate-limit policy: caller's responsibility for now. Polymarket
-publishes generous public-endpoint limits (~1.5k req / 10s for the
-market-data routes per `docs <https://docs.polymarket.com/api-reference/rate-limits>`_)
-so a single Observer cycle will not approach them. If a future caller
-batches across hundreds of markets we will add explicit pacing here.
+Rate limiting: the public CLOB endpoints publish a generous limit
+(~1.5k req / 10s for market-data routes per the Polymarket docs).
+The default :class:`~caqrs.data._common.rate_limit.AsyncRateLimiter`
+is configured with min_interval=0 (no per-second pacing) since a
+typical CAQRS Observer cycle stays well below the cap; the
+constructor accepts a custom limiter for paid-tier callers, batch
+back-fills, or shared coordination across multiple Polymarket
+clients in the same process.
 """
 
 from collections.abc import Mapping
@@ -35,6 +38,7 @@ from typing import Any, Self
 
 import httpx
 
+from caqrs.data._common.rate_limit import AsyncRateLimiter
 from caqrs.data.polymarket.schemas import (
     Orderbook,
     OrderbookLevel,
@@ -105,11 +109,20 @@ class PolymarketClobClient:
         base_url: str = _DEFAULT_BASE_URL,
         http_client: httpx.AsyncClient | None = None,
         timeout_s: float = _DEFAULT_TIMEOUT_S,
+        rate_limiter: AsyncRateLimiter | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout_s = timeout_s
         self._owns_http_client = http_client is None
         self._http_client = http_client
+        # Default no per-second pacing — public CLOB endpoints sit
+        # comfortably below their published 1.5k / 10s budget for
+        # typical CAQRS use. Callers batching across hundreds of
+        # markets supply a paced limiter (e.g. min_interval_seconds=
+        # 0.01 for 100 req/s).
+        self._rate_limiter = rate_limiter or AsyncRateLimiter(
+            min_interval_seconds=0.0,
+        )
 
     async def __aenter__(self) -> Self:
         if self._http_client is None:
@@ -213,6 +226,7 @@ class PolymarketClobClient:
         params: Mapping[str, str | int],
     ) -> Mapping[str, Any]:
         url = f"{self._base_url}{path}"
+        await self._rate_limiter.acquire()
         try:
             response = await client.get(url, params=params)
         except httpx.RequestError as exc:

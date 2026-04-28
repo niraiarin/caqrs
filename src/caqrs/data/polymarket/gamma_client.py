@@ -35,6 +35,7 @@ from typing import Any, Self
 
 import httpx
 
+from caqrs.data._common.rate_limit import AsyncRateLimiter
 from caqrs.data.polymarket.clob_client import (
     PolymarketError,
     _to_decimal,
@@ -61,11 +62,19 @@ class PolymarketGammaClient:
         base_url: str = _DEFAULT_BASE_URL,
         http_client: httpx.AsyncClient | None = None,
         timeout_s: float = _DEFAULT_TIMEOUT_S,
+        rate_limiter: AsyncRateLimiter | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout_s = timeout_s
         self._owns_http_client = http_client is None
         self._http_client = http_client
+        # Default no per-second pacing — public Gamma endpoints sit
+        # comfortably below their rate budget for typical CAQRS use.
+        # Callers batching across hundreds of slugs supply a paced
+        # limiter (e.g. min_interval_seconds=0.01 for 100 req/s).
+        self._rate_limiter = rate_limiter or AsyncRateLimiter(
+            min_interval_seconds=0.0,
+        )
 
     async def __aenter__(self) -> Self:
         if self._http_client is None:
@@ -186,6 +195,7 @@ class PolymarketGammaClient:
         params: Sequence[tuple[str, str]],
     ) -> Any:
         url = f"{self._base_url}{path}"
+        await self._rate_limiter.acquire()
         try:
             response = await client.get(url, params=list(params))
         except httpx.RequestError as exc:
