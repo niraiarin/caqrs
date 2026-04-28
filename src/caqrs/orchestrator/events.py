@@ -36,6 +36,7 @@ class CycleEventKind(StrEnum):
     STATE_TRANSITION = "state_transition"
     LOOP_DETECTED = "loop_detected"
     BUDGET_EXCEEDED = "budget_exceeded"
+    POLICY_GATEWAY_APPLIED = "policy_gateway_applied"
 
 
 class CycleEvent(BaseModel):
@@ -205,5 +206,23 @@ def budget_exceeded_event(
             "budget_kind": budget_kind,
             "consumed": consumed,
             "cap": cap,
+        },
+    )
+
+
+def policy_gateway_applied_event(
+    *,
+    cycle_id: str,
+    decision_run_id: str,
+    action: str,
+    violation_count: int,
+) -> CycleEvent:
+    return _build_event(
+        cycle_id=cycle_id,
+        kind=CycleEventKind.POLICY_GATEWAY_APPLIED,
+        payload={
+            "decision_run_id": decision_run_id,
+            "action": action,
+            "violation_count": violation_count,
         },
     )
