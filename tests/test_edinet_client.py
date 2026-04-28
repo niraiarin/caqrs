@@ -221,6 +221,30 @@ async def test_401_with_flat_shape_raises_edinet_error() -> None:
             await client.documents_list(date_=date(2026, 4, 28))
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_401_with_camelcase_status_key_also_recognised() -> None:
+    """The live gateway returns ``statusCode`` (camelCase) even though
+    spec 3-3 example B documents ``StatusCode`` (PascalCase). Detect
+    both — silent drift here would make a 401 surface as a confusing
+    pydantic ValidationError instead of a clean EdinetError."""
+    respx.get(f"{_BASE}/documents.json").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "statusCode": 401,
+                "message": (
+                    "Access denied due to invalid subscription key. "
+                    "Make sure to provide a valid key for an active subscription."
+                ),
+            },
+        ),
+    )
+    async with EdinetClient(api_key="bad-key") as client:
+        with pytest.raises(EdinetError, match="401"):
+            await client.documents_list(date_=date(2026, 4, 28))
+
+
 # === Throttle ===
 
 
