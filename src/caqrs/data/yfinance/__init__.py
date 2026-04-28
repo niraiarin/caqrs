@@ -24,6 +24,11 @@ Default install does not pull yfinance; this subpackage requires the
     pip install caqrs[yfinance]
 """
 
+from caqrs.data.yfinance.cache import (
+    DEFAULT_FINANCIALS_TTL_SECONDS,
+    DEFAULT_PRICES_TTL_SECONDS,
+    YFinanceCache,
+)
 from caqrs.data.yfinance.client import (
     YFinanceClient,
     YFinanceError,
@@ -36,6 +41,9 @@ from caqrs.data.yfinance.schemas import (
 )
 
 __all__ = [
+    "DEFAULT_FINANCIALS_TTL_SECONDS",
+    "DEFAULT_PRICES_TTL_SECONDS",
+    "YFinanceCache",
     "YFinanceClient",
     "YFinanceError",
     "YFinanceFinancialPeriod",
