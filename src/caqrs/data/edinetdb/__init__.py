@@ -39,6 +39,12 @@ Choose between the two:
   XBRL yourself → ``caqrs.data.edinetdb``
 """
 
+from caqrs.data.edinetdb.cache import (
+    DEFAULT_COMPANIES_TTL_SECONDS,
+    DEFAULT_FINANCIALS_TTL_SECONDS,
+    DEFAULT_RANKINGS_TTL_SECONDS,
+    EdinetDbCache,
+)
 from caqrs.data.edinetdb.client import (
     EdinetDbClient,
     EdinetDbError,
@@ -47,16 +53,22 @@ from caqrs.data.edinetdb.schemas import (
     EdinetDbCompaniesList,
     EdinetDbCompany,
     EdinetDbFinancialPeriod,
+    EdinetDbMeta,
     EdinetDbPagination,
     EdinetDbRoeRanking,
 )
 
 __all__ = [
+    "DEFAULT_COMPANIES_TTL_SECONDS",
+    "DEFAULT_FINANCIALS_TTL_SECONDS",
+    "DEFAULT_RANKINGS_TTL_SECONDS",
+    "EdinetDbCache",
     "EdinetDbClient",
     "EdinetDbCompaniesList",
     "EdinetDbCompany",
     "EdinetDbError",
     "EdinetDbFinancialPeriod",
+    "EdinetDbMeta",
     "EdinetDbPagination",
     "EdinetDbRoeRanking",
 ]

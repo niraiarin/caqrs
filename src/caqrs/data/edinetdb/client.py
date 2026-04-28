@@ -35,6 +35,12 @@ from typing import Any
 
 import httpx
 
+from caqrs.data.edinetdb.cache import (
+    DEFAULT_COMPANIES_TTL_SECONDS,
+    DEFAULT_FINANCIALS_TTL_SECONDS,
+    DEFAULT_RANKINGS_TTL_SECONDS,
+    EdinetDbCache,
+)
 from caqrs.data.edinetdb.schemas import (
     EdinetDbCompaniesList,
     EdinetDbFinancialPeriod,
@@ -72,12 +78,14 @@ class EdinetDbClient:
         throttle_seconds: float = _DEFAULT_THROTTLE_SECONDS,
         timeout: float = 30.0,
         base_url: str = _BASE_URL,
+        cache: EdinetDbCache | None = None,
     ) -> None:
         self._api_key = api_key
         self._throttle = throttle_seconds
         self._base_url = base_url
         self._client = httpx.AsyncClient(timeout=timeout)
         self._last_call_at: float = 0.0
+        self._cache = cache
 
     @classmethod
     def from_env(
@@ -85,6 +93,7 @@ class EdinetDbClient:
         *,
         env_var: str = "EDINETDB_API_KEY",
         throttle_seconds: float = _DEFAULT_THROTTLE_SECONDS,
+        cache: EdinetDbCache | None = None,
     ) -> EdinetDbClient:
         key = os.environ.get(env_var, "").strip()
         if not key:
@@ -94,7 +103,11 @@ class EdinetDbClient:
                 "export it (e.g. via dotenvx)."
             )
             raise EdinetDbError(msg)
-        return cls(api_key=key, throttle_seconds=throttle_seconds)
+        return cls(
+            api_key=key,
+            throttle_seconds=throttle_seconds,
+            cache=cache,
+        )
 
     @property
     def api_key(self) -> str | None:
@@ -123,9 +136,23 @@ class EdinetDbClient:
         per_page: int = 20,
     ) -> EdinetDbCompaniesList:
         """Paginated company master."""
+        if self._cache is not None:
+            cached = self._cache.get_companies(page=page, per_page=per_page)
+            if cached is not None:
+                return cached
+
         params = {"page": str(page), "per_page": str(per_page)}
         body = await self._get_json(f"{self._base_url}/companies", params=params)
-        return EdinetDbCompaniesList.model_validate(body, strict=False)
+        listing = EdinetDbCompaniesList.model_validate(body, strict=False)
+
+        if self._cache is not None:
+            self._cache.set_companies(
+                page=page,
+                per_page=per_page,
+                listing=listing,
+                ttl_seconds=DEFAULT_COMPANIES_TTL_SECONDS,
+            )
+        return listing
 
     async def company_financials(
         self,
@@ -137,12 +164,25 @@ class EdinetDbClient:
         Order is upstream-decided (typically chronological); callers
         sort by ``fiscal_year`` if a specific order matters.
         """
+        if self._cache is not None:
+            cached = self._cache.get_financials(edinet_code=edinet_code)
+            if cached is not None:
+                return cached
+
         body = await self._get_json(
             f"{self._base_url}/companies/{edinet_code}/financials",
             params={},
         )
-        rows = body.get("data", [])
-        return tuple(EdinetDbFinancialPeriod.model_validate(row, strict=False) for row in rows)
+        rows_raw = body.get("data", [])
+        rows = tuple(EdinetDbFinancialPeriod.model_validate(row, strict=False) for row in rows_raw)
+
+        if self._cache is not None and rows:
+            self._cache.set_financials(
+                edinet_code=edinet_code,
+                rows=rows,
+                ttl_seconds=DEFAULT_FINANCIALS_TTL_SECONDS,
+            )
+        return rows
 
     async def ranking_roe(
         self,
@@ -150,12 +190,26 @@ class EdinetDbClient:
         limit: int = 10,
     ) -> tuple[EdinetDbRoeRanking, ...]:
         """Top-``limit`` companies by latest-fiscal-year ROE."""
+        if self._cache is not None:
+            cached = self._cache.get_rankings(endpoint="roe", limit=limit)
+            if cached is not None:
+                return cached
+
         body = await self._get_json(
             f"{self._base_url}/rankings/roe",
             params={"limit": str(limit)},
         )
-        rows = body.get("data", [])
-        return tuple(EdinetDbRoeRanking.model_validate(row, strict=False) for row in rows)
+        rows_raw = body.get("data", [])
+        rows = tuple(EdinetDbRoeRanking.model_validate(row, strict=False) for row in rows_raw)
+
+        if self._cache is not None and rows:
+            self._cache.set_rankings(
+                endpoint="roe",
+                limit=limit,
+                rows=rows,
+                ttl_seconds=DEFAULT_RANKINGS_TTL_SECONDS,
+            )
+        return rows
 
     # === Helpers ===
 
