@@ -32,6 +32,7 @@ class PolicyViolationKind(StrEnum):
     NOTIONAL_CAP_EXCEEDED = "notional_cap_exceeded"
     TICKER_DENY_LISTED = "ticker_deny_listed"
     TICKER_NOT_ALLOWED = "ticker_not_allowed"
+    LOSS_BUDGET_EXHAUSTED = "loss_budget_exhausted"
 
 
 class PolicyViolation(StrictBaseModel):
@@ -54,6 +55,11 @@ class PolicyGatewayConfig(StrictBaseModel):
     account_notional_cap_usd: Decimal | None = Field(default=None, ge=0)
     allowed_tickers: tuple[Ticker, ...] | None = None
     denied_tickers: tuple[Ticker, ...] = ()
+    # Realized loss accumulated today against the decision's
+    # ``daily_loss_limit_usd``. The gateway never computes this — caller
+    # (e.g. a future LossBudgetTracker reading the paper-broker's
+    # position state) is responsible. Magnitude only; sign is implicit.
+    daily_realized_loss_usd: Decimal = Field(default=Decimal(0), ge=0)
 
     @model_validator(mode="after")
     def _no_allow_deny_overlap(self) -> Self:
@@ -115,6 +121,24 @@ def _collect_violations(
                 context={
                     "decision_notional": str(decision.notional_cap_usd),
                     "account_cap": str(config.account_notional_cap_usd),
+                },
+            ),
+        )
+
+    remaining_budget = decision.daily_loss_limit_usd - config.daily_realized_loss_usd
+    if remaining_budget <= 0:
+        violations.append(
+            PolicyViolation(
+                kind=PolicyViolationKind.LOSS_BUDGET_EXHAUSTED,
+                message=(
+                    f"daily realized loss {config.daily_realized_loss_usd} has consumed "
+                    f"the entire daily_loss_limit_usd {decision.daily_loss_limit_usd} "
+                    f"(remaining {remaining_budget})"
+                ),
+                context={
+                    "daily_loss_limit_usd": str(decision.daily_loss_limit_usd),
+                    "daily_realized_loss_usd": str(config.daily_realized_loss_usd),
+                    "remaining_budget_usd": str(remaining_budget),
                 },
             ),
         )
