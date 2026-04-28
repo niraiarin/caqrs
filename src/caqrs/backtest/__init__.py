@@ -26,13 +26,25 @@ from caqrs.backtest.providers import (
     mean_reversion_signals,
     momentum_signals,
 )
+from caqrs.backtest.templates import (
+    BuyAndHoldSpec,
+    MeanReversionSpec,
+    MomentumSpec,
+    StrategySpec,
+    make_jquants_executor,
+)
 
 __all__ = [
     "BacktestExecutor",
+    "BuyAndHoldSpec",
     "JQuantsPriceProvider",
+    "MeanReversionSpec",
+    "MomentumSpec",
     "PriceProvider",
+    "StrategySpec",
     "buy_and_hold_signals",
     "make_jquants_buy_and_hold_executor",
+    "make_jquants_executor",
     "make_jquants_mean_reversion_executor",
     "make_jquants_momentum_executor",
     "mean_reversion_signals",
