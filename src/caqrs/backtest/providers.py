@@ -17,7 +17,7 @@ vectorbt-backed alternative engine; both compose with the
 # Re-export to avoid leaking the orchestrator dependency through
 # caqrs.backtest's import surface.
 from collections.abc import Awaitable, Callable, Sequence
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from datetime import date as _date
 from decimal import Decimal
 from typing import Protocol
@@ -162,6 +162,144 @@ def make_jquants_buy_and_hold_executor(
             end=end,
         )
         signals = buy_and_hold_signals(plan=plan, prices=prices)
+        return run_walk_forward(
+            plan=plan,
+            prices=prices,
+            signals=signals,
+            notional_usd=notional_usd,
+        )
+
+    return _executor
+
+
+def momentum_signals(
+    *,
+    plan: ResearchPlan,
+    prices: pl.DataFrame,
+    lookback_days: int,
+    top_k: int | None = None,
+) -> pl.DataFrame:
+    """Cross-sectional momentum: rank by ``lookback_days`` past return,
+    long-equally-weight the top ``top_k`` tickers.
+
+    For each date with at least ``lookback_days`` of prior history,
+    compute each ticker's return relative to ``lookback_days`` rows
+    earlier and assign weight ``1 / top_k`` to the highest-ranked
+    ``top_k`` tickers. Days without enough history get zero weights
+    on every ticker (no position).
+
+    ``top_k=None`` defaults to ``len(plan.universe)``, in which case
+    every ticker is selected and the strategy degenerates to equal-
+    weight buy-and-hold rebalanced daily.
+    """
+    if lookback_days <= 0:
+        msg = f"lookback_days must be positive; got {lookback_days}"
+        raise ValueError(msg)
+
+    universe = list(plan.universe)
+    n = len(universe)
+    selected_k = top_k if top_k is not None else n
+    if selected_k > n:
+        msg = f"top_k={top_k} exceeds universe size {n}"
+        raise ValueError(msg)
+    if selected_k <= 0:
+        msg = f"top_k must be positive when set; got {top_k}"
+        raise ValueError(msg)
+
+    # Build a dense {date -> {ticker -> close}} table indexed by sorted dates.
+    sorted_dates = sorted(set(prices["date"].to_list()))
+    close_by_date: dict[object, dict[str, float]] = {d: {} for d in sorted_dates}
+    for date_value, ticker, close in zip(
+        prices["date"].to_list(),
+        prices["ticker"].to_list(),
+        prices["close"].to_list(),
+        strict=True,
+    ):
+        close_by_date[date_value][str(ticker)] = float(close)
+
+    weight = 1.0 / float(selected_k) if selected_k > 0 else 0.0
+    out_rows: list[dict[str, object]] = []
+    for i, day in enumerate(sorted_dates):
+        if i < lookback_days:
+            out_rows.extend({"date": day, "ticker": ticker, "weight": 0.0} for ticker in universe)
+            continue
+        prior_day = sorted_dates[i - lookback_days]
+        prior_closes = close_by_date.get(prior_day, {})
+        current_closes = close_by_date.get(day, {})
+        ranked: list[tuple[str, float]] = [
+            (
+                ticker,
+                ((current_closes[ticker] - prior_closes[ticker]) / prior_closes[ticker])
+                if (
+                    ticker in current_closes
+                    and ticker in prior_closes
+                    and prior_closes[ticker] != 0
+                )
+                else float("-inf"),
+            )
+            for ticker in universe
+        ]
+        ranked.sort(key=lambda pair: pair[1], reverse=True)
+        winners = {t for t, _ in ranked[:selected_k]}
+        out_rows.extend(
+            {
+                "date": day,
+                "ticker": ticker,
+                "weight": weight if ticker in winners else 0.0,
+            }
+            for ticker in universe
+        )
+
+    if not out_rows:
+        return pl.DataFrame(
+            schema={
+                "date": pl.Datetime(time_zone="UTC"),
+                "ticker": pl.Utf8,
+                "weight": pl.Float64,
+            },
+        )
+    return pl.DataFrame(out_rows)
+
+
+def make_jquants_momentum_executor(
+    *,
+    client: JQuantsClient,
+    lookback_days: int,
+    top_k: int | None = None,
+    notional_usd: Decimal = _DEFAULT_NOTIONAL_USD,
+) -> BacktestExecutor:
+    """Return a :data:`BacktestExecutor` that runs a top-K momentum
+    strategy over ``plan.universe`` using J-Quants prices.
+
+    Pre-fetches a calendar-day buffer of ``2 * lookback_days`` before
+    the earliest ``test_start`` so day-1 of the test window already
+    has a computable lookback return (J-Quants prices are weekly
+    sparse — weekends and holidays — so we over-allocate the buffer).
+
+    See :func:`momentum_signals` for the strategy semantics.
+    """
+    if lookback_days <= 0:
+        msg = f"lookback_days must be positive; got {lookback_days}"
+        raise ValueError(msg)
+
+    price_provider = JQuantsPriceProvider(client=client)
+    buffer_days = max(lookback_days * 2, lookback_days + 7)
+
+    async def _executor(plan: ResearchPlan) -> BacktestReport:
+        first_test_start = min(w.test_start for w in plan.walk_forward).date()
+        last_test_end = max(w.test_end for w in plan.walk_forward).date()
+        fetch_start = first_test_start - timedelta(days=buffer_days)
+        prices = await price_provider(
+            universe=list(plan.universe),
+            start=fetch_start,
+            end=last_test_end,
+        )
+        signals = momentum_signals(
+            plan=plan,
+            prices=prices,
+            lookback_days=lookback_days,
+            top_k=top_k,
+        )
         return run_walk_forward(
             plan=plan,
             prices=prices,
