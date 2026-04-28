@@ -125,11 +125,37 @@ sub-package wraps a single source:
   `fetch_polymarket_signal(gamma_client=, clob_client=, identifier=)` resolves
   a market by id or slug, fetches per-token midpoint / spread / last-trade,
   and returns a `PolymarketSignal` ready to drop onto an `ObserverInput`.
+- `caqrs.data.jquants` — JPX-official daily OHLCV + listed-issue master
+  (free tier, env-var auth). `fetch_jquants_asset_snapshot(client=, code=, as_of=None)`
+  produces an Observer-facing snapshot.
 
 Future data sources (price feeds, news, macro) will follow the same shape:
 async client per source, typed artifact, helper that composes raw responses
 into the Observer-facing snapshot. CAQRS does not bundle a single opinionated
 data layer because financial-research signals come from many uncorrelated APIs.
+
+## Backtest layer (P2)
+
+`caqrs.backtest` is a two-tier composition over the walk-forward schema:
+
+- **Engine** — `run_walk_forward(plan, prices, signals, notional_usd)` is a pure
+  function over polars DataFrames. Per fold it pivots prices to wide form,
+  derives daily returns via `pct_change`, applies a one-day signal lag (so
+  day-1 signals become day-2 positions — no lookahead bias), shifts costs
+  forward, and returns a `BacktestReport` with per-fold + aggregate metrics.
+- **Strategy templates** — `caqrs.backtest.templates` exposes a discriminated
+  union over the built-in templates (`BuyAndHoldSpec`, `MomentumSpec(lookback_days, top_k)`,
+  `MeanReversionSpec(lookback_days, bottom_k)`) plus a single `make_jquants_executor`
+  dispatch entry point that returns a `BacktestExecutor` ready to plug into
+  `CycleRunner`. The momentum / mean-reversion variants share a `_rank_signals`
+  helper that selects winners or losers symmetrically; missing-data tickers
+  are sentineled so they never enter the selection. Adding a template means
+  adding one Spec class + one branch in the dispatcher.
+
+The split between engine and templates keeps the engine source-agnostic (any
+`PriceProvider` + signal DataFrame works) while the J-Quants factories pre-fetch
+a `2 × lookback_days` calendar buffer before the earliest test start so day-1
+signals already have a computable lookback return.
 
 ## Policy Gateway position (P3)
 

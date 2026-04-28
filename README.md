@@ -104,6 +104,12 @@ uv run python scripts/live_smoke_polymarket_archive.py
 ```bash
 dotenvx run -- uv run python scripts/live_smoke_jquants.py
 dotenvx run -- uv run python scripts/live_smoke_jquants_observer.py --code 13010 --code 72030
+# Walk-forward backtest factories (P2):
+dotenvx run -- uv run python scripts/live_smoke_jquants_buy_and_hold.py
+dotenvx run -- uv run python scripts/live_smoke_jquants_momentum.py
+dotenvx run -- uv run python scripts/live_smoke_jquants_mean_reversion.py
+# Side-by-side dispatch over StrategySpec discriminated union:
+dotenvx run -- uv run python scripts/live_smoke_jquants_strategy_registry.py
 ```
 
 For the full LLM pipeline against a LiteLLM gateway, see `scripts/live_smoke_observer.py`.
@@ -127,6 +133,9 @@ src/caqrs/
 │                   # polymarket/         (CLOB + Gamma clients + signal helper)
 │                   # polymarket_archive/ (hourly Parquet from archive.pmxt.dev)
 │                   # jquants/            (JPX-official daily OHLCV + master + signal helper)
+├── backtest/       # walk-forward engine (polars) + J-Quants executor factories
+│                   # buy-and-hold / top-K momentum / bottom-K mean reversion
+│                   # StrategySpec discriminated union + make_jquants_executor dispatcher
 └── py.typed        # PEP 561 marker
 
 tests/              # pytest + hypothesis; respx-mocked HTTP; live/ gated by CAQRS_LIVE=1
@@ -141,8 +150,10 @@ scripts/            # standalone runnables (live smoke, manual integration check
    optional `polymarket_signals` pre-fetched via `caqrs.data.polymarket.fetch_polymarket_signal`).
 2. `CycleRunner` drives the typed pipeline: Observer → Hypothesis → Skeptic. If the skeptic
    verdict is `PROCEED`, Research generates a walk-forward plan, the injected
-   `BacktestExecutor` runs it (P2 plumbs in vectorbt; P1 takes a stub), and the Auditor
-   checks the report against the hypothesis's acceptance criteria.
+   `BacktestExecutor` runs it (P2 ships a polars-backed walk-forward engine plus three
+   J-Quants strategy templates: buy-and-hold, top-K momentum, bottom-K mean reversion;
+   templates are composed into a single dispatcher via `make_jquants_executor(spec=...)`),
+   and the Auditor checks the report against the hypothesis's acceptance criteria.
 3. On `audit.verdict == PASS` the Decider emits a typed `StrategyDecision` with policy
    envelopes (`notional_cap_usd`, `max_position_weight`, `daily_loss_limit_usd`).
 4. Per-step events flow into an `EventLog`; a `BudgetGuard` enforces token + wallclock caps;
@@ -195,7 +206,7 @@ periodically (e.g. once per day) with a 30-day cutoff.
 | P1.7      | README refresh                                                 | ✅                      |
 | P1.8      | Full-cycle live smoke test (LLM + Polymarket end-to-end)       | ✅                      |
 | P1.11     | J-Quants data source + Observer integration                    | ✅ a + b                |
-| P2        | Walk-forward backtest engine (vectorbt) replacing the stub     | —                       |
+| P2        | Walk-forward backtest engine + J-Quants strategy library       | ✅ a–e                  |
 | P3        | Policy Gateway + paper broker + asset/loss-limit projections   | —                       |
 | P4        | Live broker adapter (gated by human approval)                  | —                       |
 
