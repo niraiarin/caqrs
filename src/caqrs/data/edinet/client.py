@@ -223,14 +223,22 @@ class EdinetClient:
         """Detect the two error envelopes documented in spec 3-3.
 
         - metadata.status != "200" (the standard wrapper).
-        - top-level ``{StatusCode, message}`` for invalid API keys.
+        - top-level ``{StatusCode | statusCode, message}`` for invalid
+          API keys.
+
+        Spec 3-3 example B documents ``StatusCode`` (PascalCase) but
+        the live gateway also returns ``statusCode`` (camelCase). We
+        accept both — silent drift here would let the body fall through
+        to schema validation and surface as a confusing pydantic error.
         """
-        # Flat 401 shape (spec 3-3 example B).
-        if "StatusCode" in body and "message" in body:
-            status = body.get("StatusCode")
-            message = body.get("message", "")
-            msg = f"EDINET {status}: {message}"
-            raise EdinetError(msg)
+        # Flat 401 shape (spec 3-3 example B). Accept both PascalCase
+        # and camelCase status keys.
+        for status_key in ("StatusCode", "statusCode"):
+            if status_key in body and "message" in body:
+                status = body.get(status_key)
+                message = body.get("message", "")
+                msg = f"EDINET {status}: {message}"
+                raise EdinetError(msg)
         # Standard metadata-wrapped errors (spec 3-3 example A).
         metadata = body.get("metadata", {})
         status = metadata.get("status")

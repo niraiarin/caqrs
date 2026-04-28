@@ -42,6 +42,9 @@ artifacts/runs/
 
 # Secrets
 .env
-.env.local
+# Catches .env.local, .env.production, dotenvx's decryption-key
+# sidecar file, and any future .env-prefixed config that should
+# never reach the index.
+.env.*
 *.pem
 *.key
