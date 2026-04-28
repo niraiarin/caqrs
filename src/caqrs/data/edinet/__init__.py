@@ -22,6 +22,7 @@ ships without any optional install gate.
 """
 
 from caqrs.data.edinet.client import EdinetClient, EdinetError
+from caqrs.data.edinet.observer_signals import fetch_recent_filings
 from caqrs.data.edinet.schemas import (
     EdinetDocument,
     EdinetDocumentsList,
@@ -36,4 +37,5 @@ __all__ = [
     "EdinetError",
     "EdinetMetadata",
     "EdinetResultset",
+    "fetch_recent_filings",
 ]
