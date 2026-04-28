@@ -3,7 +3,33 @@
 **Source repo**: `mercury-agent` (private prototype, `Cosmic Stack`, MIT)
 **Surveyed at**: 2026-04-27
 **Surveyor**: CAQRS author + Claude Opus 4.7
-**Mercury commit**: HEAD of local checkout at `~/work/mercury-agent/mercury-agent-repo/` (no commit hash recorded; this is a working tree, not a pinned tag)
+**Mercury revision**: HEAD of a local Mercury working tree at survey
+time (no commit hash pinned).
+
+## License notice for Mercury fragments quoted in this survey
+
+Survey files contain **short illustrative excerpts** from Mercury
+source (function bodies, signature stubs, and small control-flow
+fragments — typically 5–15 lines each, used to anchor the
+"Implementation patterns" descriptions). These quotes are MIT-licensed:
+
+```
+Copyright (c) Cosmic Stack
+Licensed under the MIT License.
+```
+
+The Mercury repository itself is the canonical source; the excerpts
+here are reproduced solely for review / lineage tracing under the MIT
+licence's permissive-quoting allowance. CAQRS and Mercury share the
+same author (niraiarin / Cosmic Stack), so this is effectively self-
+quoting; the attribution is included nonetheless to keep the
+licensing audit trail unambiguous when CAQRS is published.
+
+Where actual Mercury code is **ported into CAQRS source** (not just
+quoted in research docs), the file carries an SPDX header — see
+`src/caqrs/providers/{anthropic_cli,codex_cli,_cli_creds}.py` for
+the OpenClaw-derived provider files; the same convention applies to
+any future Mercury ports.
 
 ## Purpose
 
@@ -13,9 +39,11 @@ what is in Mercury, what is worth porting to CAQRS, and what is
 deliberately out of scope. The goal is to make the lineage decisions in
 `docs/lineage.md` evidence-based rather than CLAUDE.md-summarised.
 
-This survey covers ~4,600 lines of TypeScript across 12 files. It does
-**not** copy any Mercury code — research outputs cite line ranges and
-class names so the original can be re-read in context.
+This survey covers ~4,600 lines of TypeScript across 12 files. The
+research outputs use a mix of paraphrased descriptions, named
+patterns, line-range citations, and short MIT-attributed code
+excerpts (see License notice above) so the design decisions are
+auditable against the original Mercury source.
 
 ## Files
 
@@ -69,6 +97,10 @@ into a single ranked work list.
 ## License compliance
 
 Mercury is MIT (`Cosmic Stack`). CAQRS is Apache-2.0. Research files
-contain no copied source — only paraphrased descriptions, named
-patterns, and line-range citations. If actual code is ever ported, it
-will follow ADR-0002: SPDX header + commit hash + lineage.md entry.
+quote short Mercury fragments as illustrative anchors for the design
+patterns they describe; see the **License notice** at the top of this
+index for the MIT attribution that covers those quotes. When actual
+code is **ported** into ``src/caqrs/`` (not merely quoted in research
+docs), the file carries the SPDX header + commit hash convention
+established by ADR-0002 — see the OpenClaw-derived files under
+``src/caqrs/providers/`` for the live examples.
