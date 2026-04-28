@@ -172,7 +172,7 @@ async def test_defer_action_emits_skipped_no_state_change() -> None:
     assert report.status is ExecutionStatus.SKIPPED
     assert report.fills == ()
     assert broker.positions == initial_positions
-    assert broker.capital_usd == Decimal("100000")
+    assert broker.cash_usd == Decimal("100000")
 
 
 @pytest.mark.asyncio
@@ -211,8 +211,8 @@ async def test_filled_report_updates_broker_positions() -> None:
     broker = PaperBroker(initial_capital_usd=Decimal("100000"))
     prices = {"AAPL": Decimal("200"), "MSFT": Decimal("400")}
     await broker.execute(action=_adopt_action(), prices=prices)
-    assert broker.positions["AAPL"] == Decimal("250")
-    assert broker.positions["MSFT"] == Decimal("75")
+    assert broker.positions["AAPL"].qty == Decimal("250")
+    assert broker.positions["MSFT"].qty == Decimal("75")
 
 
 # === Paper broker behaviour: REJECTED (all-or-nothing) ===

@@ -16,7 +16,7 @@ from caqrs.execution.execution_report import (
     Fill,
     FillStatus,
 )
-from caqrs.execution.paper_broker import PaperBroker
+from caqrs.execution.paper_broker import PaperBroker, Position
 from caqrs.execution.protocol import BrokerProtocol
 
 __all__ = [
@@ -26,4 +26,5 @@ __all__ = [
     "Fill",
     "FillStatus",
     "PaperBroker",
+    "Position",
 ]
