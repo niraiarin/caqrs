@@ -221,9 +221,7 @@ def momentum_signals(
     out_rows: list[dict[str, object]] = []
     for i, day in enumerate(sorted_dates):
         if i < lookback_days:
-            out_rows.extend(
-                {"date": day, "ticker": ticker, "weight": 0.0} for ticker in universe
-            )
+            out_rows.extend({"date": day, "ticker": ticker, "weight": 0.0} for ticker in universe)
             continue
         prior_day = sorted_dates[i - lookback_days]
         prior_closes = close_by_date.get(prior_day, {})
