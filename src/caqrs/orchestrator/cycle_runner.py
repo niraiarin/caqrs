@@ -63,12 +63,18 @@ from caqrs.orchestrator.events import (
     cycle_aborted_event,
     cycle_completed_event,
     cycle_started_event,
+    policy_gateway_applied_event,
     state_transition_event,
 )
 from caqrs.orchestrator.state import OrchestratorState
 from caqrs.orchestrator.state_machine import (
     OrchestratorStateMachine,
     StateTransition,
+)
+from caqrs.policy.gateway import (
+    FeasibleAction,
+    PolicyGatewayConfig,
+    apply_policy_gateway,
 )
 from caqrs.schemas.audit import AuditReport, AuditVerdict
 from caqrs.schemas.backtest_report import BacktestReport
@@ -109,6 +115,7 @@ class CycleArtifacts(BaseModel):
     backtest: BacktestReport | None = None
     audit: AuditReport | None = None
     decision: StrategyDecision | None = None
+    feasible_action: FeasibleAction | None = None
 
 
 class CycleResult(BaseModel):
@@ -144,6 +151,7 @@ class _ArtifactsBuilder:
     backtest: BacktestReport | None = None
     audit: AuditReport | None = None
     decision: StrategyDecision | None = None
+    feasible_action: FeasibleAction | None = None
 
     def count(self) -> int:
         return sum(
@@ -156,6 +164,7 @@ class _ArtifactsBuilder:
                 self.backtest,
                 self.audit,
                 self.decision,
+                self.feasible_action,
             )
             if v is not None
         )
@@ -169,6 +178,7 @@ class _ArtifactsBuilder:
             backtest=self.backtest,
             audit=self.audit,
             decision=self.decision,
+            feasible_action=self.feasible_action,
         )
 
 
@@ -205,6 +215,7 @@ class CycleRunner:
         budget: CycleBudget,
         clock: Callable[[], datetime] | None = None,
         cycle_store: CycleStoreProtocol | None = None,
+        policy_gateway_config: PolicyGatewayConfig | None = None,
     ) -> None:
         self._observer = observer
         self._hypothesis = hypothesis
@@ -217,6 +228,7 @@ class CycleRunner:
         self._budget = budget
         self._clock = clock
         self._cycle_store = cycle_store
+        self._policy_gateway_config = policy_gateway_config
 
     async def run(self, observer_input: ObserverInput) -> CycleResult:  # noqa: PLR0911
         # Each early-return is a deliberate fail-fast at a phase boundary
@@ -342,6 +354,25 @@ class CycleRunner:
         if isinstance(decider_outcome, _Halt):
             return self._finalize(ctx=ctx, halt=decider_outcome)
         ctx.artifacts.decision = decider_outcome
+
+        # === Policy Gateway (P3) ===
+        # Pure-function projection over the decision artifact. Skipped
+        # entirely when no config is supplied — keeps existing callers
+        # behaviourally identical.
+        if self._policy_gateway_config is not None:
+            feasible = apply_policy_gateway(
+                decision=decider_outcome,
+                config=self._policy_gateway_config,
+            )
+            ctx.artifacts.feasible_action = feasible
+            ctx.event_log.append(
+                policy_gateway_applied_event(
+                    cycle_id=ctx.cycle_id,
+                    decision_run_id=decider_outcome.metadata.run_id,
+                    action=feasible.action.value,
+                    violation_count=len(feasible.violations),
+                ),
+            )
 
         return self._complete(ctx=ctx, terminal=OrchestratorState.DECIDING)
 
