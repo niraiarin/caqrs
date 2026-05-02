@@ -57,6 +57,26 @@ def test_pydantic_models_are_frozen() -> None:
         setattr(issuer, "display_name", "Toyota Motor")  # noqa: B010
 
 
+def test_issuer_identifiers_are_canonicalized_by_kind_and_value() -> None:
+    issuer = Issuer(
+        id="I0123456789abcdef",
+        lei=None,
+        jcn=None,
+        display_name="Toyota Motor Corporation",
+        identifiers=(
+            Identifier(kind=IdentifierKind.YFINANCE_TICKER, value="7203.T"),
+            Identifier(kind=IdentifierKind.JQUANTS_CODE, value="72030"),
+            Identifier(kind=IdentifierKind.EDINET_CODE, value="E02144"),
+        ),
+    )
+
+    assert issuer.identifiers == (
+        Identifier(kind=IdentifierKind.EDINET_CODE, value="E02144"),
+        Identifier(kind=IdentifierKind.JQUANTS_CODE, value="72030"),
+        Identifier(kind=IdentifierKind.YFINANCE_TICKER, value="7203.T"),
+    )
+
+
 def test_provenance_rejects_non_sha256_payload_hash() -> None:
     with pytest.raises(ValidationError):
         Provenance(

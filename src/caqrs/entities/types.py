@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -57,6 +58,23 @@ class Identifier(StrictBaseModel):
     value: str = Field(min_length=1, max_length=64)
 
 
+def _identifier_sort_key(identifier: object) -> tuple[str, str]:
+    if isinstance(identifier, Identifier):
+        return (identifier.kind.value, identifier.value)
+    if isinstance(identifier, Mapping):
+        kind = identifier.get("kind")
+        value = identifier.get("value")
+        if isinstance(kind, IdentifierKind):
+            kind_value = kind.value
+        elif isinstance(kind, str):
+            kind_value = kind
+        else:
+            kind_value = ""
+        identifier_value = value if isinstance(value, str) else ""
+        return (kind_value, identifier_value)
+    return ("", "")
+
+
 class Issuer(StrictBaseModel):
     """Canonical legal-entity record."""
 
@@ -65,6 +83,18 @@ class Issuer(StrictBaseModel):
     jcn: str | None = Field(default=None, pattern=r"^\d{13}$")
     display_name: str = Field(min_length=1, max_length=256)
     identifiers: tuple[Identifier, ...]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _canonicalize_identifier_order(cls, values: object) -> object:
+        if not isinstance(values, dict):
+            return values
+        identifiers = values.get("identifiers")
+        if not isinstance(identifiers, (list, tuple)):
+            return values
+        normalized = dict(values)
+        normalized["identifiers"] = tuple(sorted(identifiers, key=_identifier_sort_key))
+        return normalized
 
 
 class Provenance(StrictBaseModel):
