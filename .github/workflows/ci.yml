@@ -44,6 +44,9 @@ jobs:
       - name: Check requirement traceability
         run: uv run --with pyyaml python scripts/check_traceability.py
 
+      - name: Check data-source TOS coverage
+        run: python scripts/check_data_source_tos.py
+
       - name: Test
         run: uv run pytest --cov=caqrs --cov-report=xml
 

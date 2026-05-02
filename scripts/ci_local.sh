@@ -37,19 +37,22 @@ run_gates() {
         local uv_run=(uv run --frozen)
     fi
 
-    echo "[1/5] ruff format --check"
+    echo "[1/6] ruff format --check"
     "${uv_run[@]}" ruff format --check .
 
-    echo "[2/5] ruff check"
+    echo "[2/6] ruff check"
     "${uv_run[@]}" ruff check .
 
-    echo "[3/5] mypy"
+    echo "[3/6] mypy"
     "${uv_run[@]}" mypy src tests
 
-    echo "[4/5] traceability"
+    echo "[4/6] traceability"
     "${uv_run[@]}" --with pyyaml python scripts/check_traceability.py
 
-    echo "[5/5] pytest (HYPOTHESIS_PROFILE=ci)"
+    echo "[5/6] tos"
+    python scripts/check_data_source_tos.py
+
+    echo "[6/6] pytest (HYPOTHESIS_PROFILE=ci)"
     "${uv_run[@]}" pytest --cov=caqrs --cov-report=xml
 
     echo
