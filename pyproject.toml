@@ -80,6 +80,7 @@ dev = [
     "yfinance>=0.2.40,<1",
     # Persistent EntityStore tests need DuckDB in dev without --extra entities.
     "duckdb>=1.0,<2",
+    "pytest-benchmark>=4.0,<5",
 ]
 
 # === ruff ===
@@ -160,6 +161,10 @@ ignore_missing_imports = true
 module = "duckdb"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "pytest_benchmark.*"
+ignore_missing_imports = true
+
 [tool.pydantic-mypy]
 init_forbid_extra = true
 init_typed = true
@@ -168,13 +173,14 @@ warn_required_dynamic_aliases = true
 # === pytest ===
 
 [tool.pytest.ini_options]
-addopts = "-ra --strict-markers --strict-config"
+addopts = "-ra --strict-markers --strict-config -m 'not perf'"
 testpaths = ["tests"]
 xfail_strict = true
 asyncio_mode = "auto"
 markers = [
     "live: requires a real LLM endpoint, gated by CAQRS_LIVE=1",
     "traces(req_id): link this test to one or more REQ-IDs in docs/requirements/registry.yaml. Example: @pytest.mark.traces('ENT-A1')",
+    "perf: performance smoke benchmark (Task #89); runs in a separate CI job, deselected from the default `pytest -q`.",
 ]
 filterwarnings = [
     "error",
