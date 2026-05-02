@@ -37,6 +37,7 @@ class CycleEventKind(StrEnum):
     LOOP_DETECTED = "loop_detected"
     BUDGET_EXCEEDED = "budget_exceeded"
     POLICY_GATEWAY_APPLIED = "policy_gateway_applied"
+    BROKER_EXECUTED = "broker_executed"
 
 
 class CycleEvent(BaseModel):
@@ -224,5 +225,25 @@ def policy_gateway_applied_event(
             "decision_run_id": decision_run_id,
             "action": action,
             "violation_count": violation_count,
+        },
+    )
+
+
+def broker_executed_event(
+    *,
+    cycle_id: str,
+    decision_run_id: str,
+    status: str,
+    fill_count: int,
+    reason: str | None,
+) -> CycleEvent:
+    return _build_event(
+        cycle_id=cycle_id,
+        kind=CycleEventKind.BROKER_EXECUTED,
+        payload={
+            "decision_run_id": decision_run_id,
+            "status": status,
+            "fill_count": fill_count,
+            "reason": reason,
         },
     )

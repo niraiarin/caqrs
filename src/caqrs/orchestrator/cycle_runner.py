@@ -38,6 +38,7 @@ layer.
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
@@ -48,6 +49,8 @@ from caqrs.agents.auditor import AuditorInput
 from caqrs.agents.decider import DeciderInput
 from caqrs.agents.protocol import Agent, AgentResult
 from caqrs.agents.research import ResearchInput
+from caqrs.execution.execution_report import ExecutionReport
+from caqrs.execution.protocol import BrokerProtocol
 from caqrs.orchestrator.budget import (
     BudgetGuard,
     BudgetStatus,
@@ -60,6 +63,7 @@ from caqrs.orchestrator.events import (
     agent_failed_event,
     agent_invoked_event,
     agent_succeeded_event,
+    broker_executed_event,
     cycle_aborted_event,
     cycle_completed_event,
     cycle_started_event,
@@ -78,7 +82,7 @@ from caqrs.policy.gateway import (
 )
 from caqrs.schemas.audit import AuditReport, AuditVerdict
 from caqrs.schemas.backtest_report import BacktestReport
-from caqrs.schemas.common import new_run_id
+from caqrs.schemas.common import Ticker, new_run_id
 from caqrs.schemas.decision import StrategyDecision
 from caqrs.schemas.hypothesis_card import HypothesisCard
 from caqrs.schemas.observer import ObserverArtifact, ObserverInput
@@ -86,6 +90,7 @@ from caqrs.schemas.research_plan import ResearchPlan
 from caqrs.schemas.skeptic import SkepticReport, SkepticVerdict
 
 BacktestExecutor = Callable[[ResearchPlan], Awaitable[BacktestReport]]
+PriceProvider = Callable[[FeasibleAction], Awaitable[dict[Ticker, Decimal]]]
 
 
 class CycleStoreProtocol(Protocol):
@@ -116,6 +121,7 @@ class CycleArtifacts(BaseModel):
     audit: AuditReport | None = None
     decision: StrategyDecision | None = None
     feasible_action: FeasibleAction | None = None
+    execution_report: ExecutionReport | None = None
 
 
 class CycleResult(BaseModel):
@@ -152,6 +158,7 @@ class _ArtifactsBuilder:
     audit: AuditReport | None = None
     decision: StrategyDecision | None = None
     feasible_action: FeasibleAction | None = None
+    execution_report: ExecutionReport | None = None
 
     def count(self) -> int:
         return sum(
@@ -165,6 +172,7 @@ class _ArtifactsBuilder:
                 self.audit,
                 self.decision,
                 self.feasible_action,
+                self.execution_report,
             )
             if v is not None
         )
@@ -179,6 +187,7 @@ class _ArtifactsBuilder:
             audit=self.audit,
             decision=self.decision,
             feasible_action=self.feasible_action,
+            execution_report=self.execution_report,
         )
 
 
@@ -216,6 +225,8 @@ class CycleRunner:
         clock: Callable[[], datetime] | None = None,
         cycle_store: CycleStoreProtocol | None = None,
         policy_gateway_config: PolicyGatewayConfig | None = None,
+        broker: BrokerProtocol | None = None,
+        price_provider: PriceProvider | None = None,
     ) -> None:
         self._observer = observer
         self._hypothesis = hypothesis
@@ -229,6 +240,8 @@ class CycleRunner:
         self._clock = clock
         self._cycle_store = cycle_store
         self._policy_gateway_config = policy_gateway_config
+        self._broker = broker
+        self._price_provider = price_provider
 
     async def run(self, observer_input: ObserverInput) -> CycleResult:  # noqa: PLR0911
         # Each early-return is a deliberate fail-fast at a phase boundary
@@ -371,6 +384,35 @@ class CycleRunner:
                     decision_run_id=decider_outcome.metadata.run_id,
                     action=feasible.action.value,
                     violation_count=len(feasible.violations),
+                ),
+            )
+
+        # === Broker (P3.d-4) ===
+        broker_action = ctx.artifacts.feasible_action
+        if (
+            self._broker is not None
+            and self._price_provider is not None
+            and broker_action is not None
+        ):
+            try:
+                prices = await self._price_provider(broker_action)
+            except Exception as exc:
+                return self._finalize(
+                    ctx=ctx,
+                    halt=_Halt(
+                        kind=_HaltKind.AGENT_FAILED,
+                        reason=f"price_provider: {exc}",
+                    ),
+                )
+            report = await self._broker.execute(action=broker_action, prices=prices)
+            ctx.artifacts.execution_report = report
+            ctx.event_log.append(
+                broker_executed_event(
+                    cycle_id=ctx.cycle_id,
+                    decision_run_id=broker_action.source_decision_run_id,
+                    status=report.status.value,
+                    fill_count=len(report.fills),
+                    reason=report.reason,
                 ),
             )
 
