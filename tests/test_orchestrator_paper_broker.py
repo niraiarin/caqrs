@@ -223,9 +223,13 @@ def _strategy_decision(
 ) -> StrategyDecision:
     if targets is None:
         targets = (
-            TargetPosition(ticker="AAPL", side=Side.BUY, weight=Decimal("0.5")),
-            TargetPosition(ticker="MSFT", side=Side.BUY, weight=Decimal("0.5")),
-        ) if action is DecisionAction.ADOPT else ()
+            (
+                TargetPosition(ticker="AAPL", side=Side.BUY, weight=Decimal("0.5")),
+                TargetPosition(ticker="MSFT", side=Side.BUY, weight=Decimal("0.5")),
+            )
+            if action is DecisionAction.ADOPT
+            else ()
+        )
     return StrategyDecision(
         metadata=_meta(agent="decider"),
         backtest_run_id=backtest_run_id,
