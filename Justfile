@@ -32,6 +32,12 @@ test:
 test-cov:
     uv run pytest --cov=caqrs --cov-report=term-missing
 
+# Run performance smoke benchmarks (NFR-PERF-1, NFR-PERF-3). These are
+# deselected from the default `just test` via `addopts = "-m 'not perf'"`
+# in pyproject.toml, and run in a separate, non-blocking CI job (Task #89).
+perf:
+    uv run pytest -m perf --benchmark-only --benchmark-disable-gc
+
 # === Aggregate ===
 ci: fmt-check lint typecheck traceability tos test
     @echo "All CI checks passed."

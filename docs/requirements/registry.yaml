@@ -22,7 +22,7 @@
 #   #80 -- @traces pytest marker + CI registry consistency check.
 #   #89 -- perf bench harness (turns NFR-PERF-* placeholders into gates).
 
-version: 5
+version: 6
 generated_at: "2026-05-02"
 
 requirements:
@@ -2295,11 +2295,13 @@ requirements:
     target:
       metric: "issuer lookup p95 latency"
       threshold: "<= 5ms at 10k issuers (DuckDB), <= 1ms (in-memory)"
-      measurement: "pytest-benchmark in tests/perf/ (Task #89)"
+      measurement: "pytest-benchmark in tests/perf/test_entities_perf.py (Task #89). Initially non-blocking (continue-on-error in CI) until ~1 week of stable baselines establishes runner variance."
     types: []
-    tests: []
-    status: partial
-    notes: "Threshold catalogued by #79; perf gate lands in #89."
+    tests:
+      - path: tests/perf/test_entities_perf.py
+        names: [test_in_memory_issuer_lookup_p95_under_1ms_at_10k, test_duckdb_issuer_lookup_p95_under_5ms_at_10k]
+    status: formalized
+    notes: "Promoted partial -> formalized in #89; perf job is informational (continue-on-error) until baselines stabilise."
 
   - id: NFR-PERF-2
     kind: non-functional
@@ -2319,19 +2321,21 @@ requirements:
 
   - id: NFR-PERF-3
     kind: non-functional
-    subsystem: backtest
-    title: "Walk-forward engine throughput on representative universe"
+    subsystem: entities
+    title: "DuckDB cold-open round-trip latency at 100k market_points"
     spec:
       file: docs/requirements/non-functional.md
       section: "## Performance / NFR-PERF-3"
     target:
-      metric: "run_walk_forward folds/sec at universe=200, history=2y"
-      threshold: ">= 0.5 fold/s on CI baseline runner (universe=200, history=2y, single-core)"
-      measurement: "pytest-benchmark in tests/perf/ (Task #89)"
+      metric: "open DuckDB file + read all issuers (after 100 issuers x 1000 points seeded) median latency"
+      threshold: "<= 200ms median, single-process, single-core"
+      measurement: "pytest-benchmark in tests/perf/test_entities_perf.py (Task #89). Initially non-blocking (continue-on-error in CI) until ~1 week of stable baselines establishes runner variance."
     types: []
-    tests: []
-    status: partial
-    notes: ""
+    tests:
+      - path: tests/perf/test_entities_perf.py
+        names: [test_duckdb_cold_open_round_trip_under_200ms]
+    status: formalized
+    notes: "Promoted partial -> formalized in #89. Original target (walk-forward folds/sec) was a placeholder pre-#79; #89 retargets this NFR to the DuckDB cold-open contract per task spec. NFR-PERF-2 (cycle wallclock) remains BudgetGuard-enforced at runtime."
 
   - id: NFR-SEC-1
     kind: non-functional
