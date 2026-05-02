@@ -83,6 +83,7 @@ def _bars_payload(records: list[dict[str, object]]) -> dict[str, object]:
 # === mean_reversion_signals: ranking ===
 
 
+@pytest.mark.traces("BACKTEST-A4")
 def test_mean_reversion_bottom_1_picks_lowest_lookback_return() -> None:
     """With two tickers and bottom_k=1, the ticker with the LOWER
     lookback-day return earns the full weight; the other gets zero."""

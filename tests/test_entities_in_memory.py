@@ -33,12 +33,14 @@ _B_ID = "I000000000000000b"
 _C_ID = "I000000000000000c"
 
 
+@pytest.mark.traces("ENT-A1", "ENT-T1")
 def test_empty_store_lookup_returns_none() -> None:
     store = InMemoryEntityStore()
 
     assert store.lookup_issuer(kind=IdentifierKind.JQUANTS_CODE, value="72030") is None
 
 
+@pytest.mark.traces("ENT-A1", "ENT-T2")
 def test_lookup_by_each_toyota_identifier_returns_same_issuer() -> None:
     store = InMemoryEntityStore()
     issuer = _toyota()
@@ -49,6 +51,7 @@ def test_lookup_by_each_toyota_identifier_returns_same_issuer() -> None:
     assert store.lookup_issuer(kind=IdentifierKind.YFINANCE_TICKER, value="7203.T") == issuer
 
 
+@pytest.mark.traces("ENT-A2", "ENT-T3")
 def test_lookup_by_jcn_then_lei_returns_equal_issuer() -> None:
     store = InMemoryEntityStore()
     issuer = _toyota()
@@ -60,6 +63,7 @@ def test_lookup_by_jcn_then_lei_returns_equal_issuer() -> None:
     assert via_jcn == via_lei == issuer
 
 
+@pytest.mark.traces("ENT-A3", "ENT-T4")
 def test_upsert_rejects_identifier_registered_to_different_issuer() -> None:
     store = InMemoryEntityStore()
     store.upsert_issuer(issuer=_toyota())
@@ -75,6 +79,7 @@ def test_upsert_rejects_identifier_registered_to_different_issuer() -> None:
         store.upsert_issuer(issuer=other)
 
 
+@pytest.mark.traces("ENT-A3", "ENT-T4")
 def test_identifier_conflict_error_exposes_payload_fields() -> None:
     store = InMemoryEntityStore()
     toyota = _toyota()
@@ -97,6 +102,7 @@ def test_identifier_conflict_error_exposes_payload_fields() -> None:
     assert error.proposed_issuer_id == other_issuer.id
 
 
+@pytest.mark.traces("ENT-A4", "ENT-T5")
 def test_market_series_uses_jquants_when_priority_covers_whole_range() -> None:
     store = _store_with_toyota()
     points = _daily_points(
@@ -134,6 +140,7 @@ def test_market_series_uses_jquants_when_priority_covers_whole_range() -> None:
     assert series.conflict_log == ()
 
 
+@pytest.mark.traces("ENT-A4", "ENT-T6")
 def test_market_series_falls_back_to_yfinance_for_uncovered_days() -> None:
     store = _store_with_toyota()
     jquants_points = _daily_points(
@@ -171,6 +178,7 @@ def test_market_series_falls_back_to_yfinance_for_uncovered_days() -> None:
     assert series.conflict_log == ()
 
 
+@pytest.mark.traces("ENT-A4", "ENT-T6")
 def test_t6_conflict_log_records_disagreed_points() -> None:
     store = _store_with_toyota()
     timestamp = datetime(2025, 6, 2, tzinfo=UTC)
@@ -205,6 +213,7 @@ def test_t6_conflict_log_records_disagreed_points() -> None:
     assert series.conflict_log[0].discarded == (lower_priority,)
 
 
+@pytest.mark.traces("ENT-A10")
 def test_append_market_points_rejects_unknown_issuer() -> None:
     store = InMemoryEntityStore()
 
@@ -224,6 +233,7 @@ def test_append_filing_with_unknown_issuer_raises() -> None:
         store.append_filing(filing=filing)
 
 
+@pytest.mark.traces("ENT-A5", "ENT-T7")
 def test_append_filing_then_filings_for_returns_filing() -> None:
     store = _store_with_toyota()
     filing = _filing(doc_id="S1000001", submitted_at=datetime(2025, 6, 1, 1, tzinfo=UTC))
@@ -236,6 +246,7 @@ def test_append_filing_then_filings_for_returns_filing() -> None:
     ) == (filing,)
 
 
+@pytest.mark.traces("ENT-A5", "ENT-T8")
 def test_corrective_filing_is_returned_in_submit_time_order() -> None:
     store = _store_with_toyota()
     original = _filing(doc_id="S1000001", submitted_at=datetime(2025, 6, 1, 1, tzinfo=UTC))
@@ -256,6 +267,7 @@ def test_corrective_filing_is_returned_in_submit_time_order() -> None:
     assert filings[1].parent_doc_id == original.doc_id
 
 
+@pytest.mark.traces("ENT-A6", "ENT-T9")
 def test_subsidiaries_of_returns_relation_active_on_last_effective_day() -> None:
     store = _store_with_relation_graph()
 
@@ -265,6 +277,7 @@ def test_subsidiaries_of_returns_relation_active_on_last_effective_day() -> None
     ) == (store.get_issuer(issuer_id=_A_ID),)
 
 
+@pytest.mark.traces("ENT-A6", "ENT-T10")
 def test_subsidiaries_of_excludes_relation_on_exclusive_end_date() -> None:
     store = _store_with_relation_graph()
 
@@ -277,6 +290,7 @@ def test_subsidiaries_of_excludes_relation_on_exclusive_end_date() -> None:
     )
 
 
+@pytest.mark.traces("ENT-A11")
 def test_append_relation_with_unknown_issuer_raises() -> None:
     store = InMemoryEntityStore()
     store.upsert_issuer(issuer=_issuer(_A_ID, "A"))
@@ -293,6 +307,7 @@ def test_append_relation_with_unknown_issuer_raises() -> None:
         store.append_relation(relation=relation)
 
 
+@pytest.mark.traces("ENT-A8", "ENT-T12")
 def test_market_point_provenance_preserves_jquants_payload_hash() -> None:
     store = _store_with_toyota()
     original_response = {"daily_quotes": [{"Code": "72030", "Date": "2025-06-02", "Close": "1"}]}

@@ -104,6 +104,7 @@ def test_momentum_top_k_equals_universe_size_matches_buy_and_hold() -> None:
     assert nonzero == [0.5]
 
 
+@pytest.mark.traces("BACKTEST-A3")
 def test_momentum_top_1_picks_highest_lookback_return() -> None:
     """With two tickers and top_k=1, the ticker with the higher
     lookback-day return earns the full weight; the other gets zero."""

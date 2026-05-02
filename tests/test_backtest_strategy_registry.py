@@ -148,6 +148,7 @@ def test_strategy_spec_union_rejects_unknown_template() -> None:
         TypeAdapter(StrategySpec).validate_python({"template": "buy_high_sell_low"})
 
 
+@pytest.mark.traces("BACKTEST-A2")
 def test_strategy_spec_union_round_trips_through_json() -> None:
     """Specs serialise + parse back to the same instance — important for
     when ResearchPlan eventually carries a StrategySpec field."""

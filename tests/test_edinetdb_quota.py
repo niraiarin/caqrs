@@ -47,6 +47,7 @@ def test_zero_count_on_fresh_tracker(tmp_path: Path) -> None:
     assert tracker.quota_remaining(now=now) == 100
 
 
+@pytest.mark.traces("DATA-EDB-A1")
 def test_record_request_increments_count(tmp_path: Path) -> None:
     tracker = DailyQuotaTracker(db_path=tmp_path / "q.db", daily_cap=100)
     base = datetime(2026, 4, 28, 12, 0, tzinfo=UTC)

@@ -128,6 +128,7 @@ async def test_complete_raises_when_not_logged_in(tmp_path: Path) -> None:
         await p.complete(messages=_msgs(), schema=_Sentiment, max_output_tokens=64)
 
 
+@pytest.mark.traces("PROV-A4")
 async def test_complete_raises_when_cred_expired(tmp_path: Path) -> None:
     home = tmp_path / ".codex"
     home.mkdir(parents=True)

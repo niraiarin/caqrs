@@ -267,6 +267,7 @@ def _token_cred(expires_at_ms: int) -> TokenCredential:
     )
 
 
+@pytest.mark.traces("PROV-A6")
 def test_is_cred_fresh_with_far_future_expiry() -> None:
     future = int((time.time() + 3600) * 1000)
     assert is_cred_fresh(_token_cred(future)) is True
