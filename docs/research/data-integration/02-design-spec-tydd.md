@@ -314,7 +314,17 @@ class EntityStore(Protocol):
         range_: tuple[datetime, datetime],
         source_priority: tuple[Source, ...],
     ) -> MarketSeries: ...
-    def append_market_points(self, *, points: Sequence[MarketPoint]) -> None: ...
+    def append_market_points(
+        self,
+        *,
+        issuer_id: IssuerId,
+        kind: MarketSeriesKind,
+        points: Sequence[MarketPoint],
+    ) -> None: ...
+
+    # MarketPoint deliberately stays small: denormalising issuer_id and kind
+    # onto every point would bloat the data. Stores index points internally by
+    # (issuer_id, kind, source), with source taken from each point's provenance.
 
     # Filings
     def append_filing(self, *, filing: Filing) -> None: ...
