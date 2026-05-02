@@ -22,7 +22,7 @@
 #   #80 -- @traces pytest marker + CI registry consistency check.
 #   #89 -- perf bench harness (turns NFR-PERF-* placeholders into gates).
 
-version: 4
+version: 5
 generated_at: "2026-05-02"
 
 requirements:
@@ -2461,6 +2461,55 @@ requirements:
     types: []
     tests: []
     status: partial
+    notes: ""
+
+  - id: NFR-OBS-3
+    kind: non-functional
+    subsystem: orchestrator
+    title: "Correlation IDs propagate through every event in a cycle (decision-trace chain)"
+    spec:
+      file: docs/observability-spec.md
+      section: "§2 ID taxonomy; §4 Cross-event invariants — the decision-trace chain"
+    target:
+      metric: "for every successful cycle: cycle_id stable across all events; event_id unique; timestamp tz-aware UTC; StrategyDecision.metadata.run_id == POLICY_GATEWAY_APPLIED.payload.decision_run_id == BROKER_EXECUTED.payload.decision_run_id == ExecutionReport.source_decision_run_id; for every agent invocation: AGENT_INVOKED.payload.run_id == AGENT_SUCCEEDED.payload.run_id (or AGENT_FAILED.payload.run_id on the failure path); for every aborted cycle: cycle_id invariant still holds on every event emitted before abort"
+      threshold: "0 violations across the cycle log; the four-way artifact-id equality holds verbatim; the invocation-id pairing holds verbatim"
+      measurement: "tests/test_correlation_id_propagation.py"
+    types:
+      - src/caqrs/orchestrator/events.py::CycleEvent
+      - src/caqrs/orchestrator/events.py::CycleEventKind
+      - src/caqrs/orchestrator/event_log.py::EventLog
+    tests:
+      - path: tests/test_correlation_id_propagation.py
+        names:
+          - test_all_events_share_cycle_id
+          - test_all_event_ids_are_unique
+          - test_all_event_timestamps_are_tz_aware_utc
+          - test_agent_invoked_succeeded_run_ids_pair_per_invocation
+          - test_gateway_decision_run_id_propagates_to_broker_event
+          - test_execution_report_source_decision_run_id_matches_decision
+          - test_aborted_cycle_still_carries_cycle_id_on_every_emitted_event
+    status: formalized
+    notes: "Decision-trace chain runs on the artifact-id axis (StrategyDecision.metadata.run_id), not the runner's invocation-id axis. Both axes are tested separately; see docs/observability-spec.md §2 for the rationale."
+
+  - id: NFR-OBS-4
+    kind: non-functional
+    subsystem: orchestrator
+    title: "Per-event-kind required payload fields are present and non-empty"
+    spec:
+      file: docs/observability-spec.md
+      section: "§3 Per-event-kind required fields"
+    target:
+      metric: "for each tracked CycleEventKind, every event of that kind in a cycle log carries the required payload keys with non-empty string values"
+      threshold: "AGENT_INVOKED / AGENT_SUCCEEDED / AGENT_FAILED carry agent_name + run_id; POLICY_GATEWAY_APPLIED + BROKER_EXECUTED carry decision_run_id"
+      measurement: "tests/test_correlation_id_propagation.py::test_per_event_kind_required_payload_fields_present"
+    types:
+      - src/caqrs/orchestrator/events.py::CycleEvent
+      - src/caqrs/orchestrator/events.py::CycleEventKind
+    tests:
+      - path: tests/test_correlation_id_propagation.py
+        names:
+          - test_per_event_kind_required_payload_fields_present
+    status: formalized
     notes: ""
 
   - id: NFR-SCALE-1
