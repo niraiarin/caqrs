@@ -22,7 +22,7 @@
 #   #80 -- @traces pytest marker + CI registry consistency check.
 #   #89 -- perf bench harness (turns NFR-PERF-* placeholders into gates).
 
-version: 1
+version: 2
 generated_at: "2026-05-02"
 
 requirements:
@@ -2291,15 +2291,15 @@ requirements:
     title: "Issuer lookup latency (in-memory and DuckDB)"
     spec:
       file: docs/requirements/non-functional.md
-      section: "NFR-PERF-1 placeholder"
+      section: "## Performance / NFR-PERF-1"
     target:
       metric: "issuer lookup p95 latency"
       threshold: "<= 5ms at 10k issuers (DuckDB), <= 1ms (in-memory)"
       measurement: "pytest-benchmark in tests/perf/ (Task #89)"
     types: []
     tests: []
-    status: deferred
-    notes: "Placeholder until #79 catalogues NFRs and #89 adds the gate."
+    status: partial
+    notes: "Threshold catalogued by #79; perf gate lands in #89."
 
   - id: NFR-PERF-2
     kind: non-functional
@@ -2307,14 +2307,14 @@ requirements:
     title: "End-to-end cycle latency (stub providers, no I/O)"
     spec:
       file: docs/requirements/non-functional.md
-      section: "NFR-PERF-2 placeholder"
+      section: "## Performance / NFR-PERF-2"
     target:
       metric: "CycleRunner.run() median latency with stub agents"
-      threshold: "TBD (Task #79)"
+      threshold: "<= 5s median, <= 10s p95 (stub agents, no I/O)"
       measurement: "pytest-benchmark; tests/perf/test_cycle_latency.py (Task #89)"
     types: []
     tests: []
-    status: deferred
+    status: partial
     notes: ""
 
   - id: NFR-PERF-3
@@ -2323,14 +2323,14 @@ requirements:
     title: "Walk-forward engine throughput on representative universe"
     spec:
       file: docs/requirements/non-functional.md
-      section: "NFR-PERF-3 placeholder"
+      section: "## Performance / NFR-PERF-3"
     target:
       metric: "run_walk_forward folds/sec at universe=200, history=2y"
-      threshold: "TBD (Task #79)"
+      threshold: ">= 0.5 fold/s on CI baseline runner (universe=200, history=2y, single-core)"
       measurement: "pytest-benchmark in tests/perf/ (Task #89)"
     types: []
     tests: []
-    status: deferred
+    status: partial
     notes: ""
 
   - id: NFR-SEC-1
@@ -2339,15 +2339,15 @@ requirements:
     title: "Subscription credentials never extracted; only CLI session paths read"
     spec:
       file: docs/requirements/non-functional.md
-      section: "NFR-SEC-1 placeholder"
+      section: "## Security / NFR-SEC-1"
     target:
       metric: "credential read sites match {~/.claude, ~/.codex/sessions, macOS Keychain}"
       threshold: "no other read sites (audited via grep + ADR-0002 compliance posture)"
       measurement: "manual audit + linter rule (Task #79+)"
     types: []
     tests: []
-    status: deferred
-    notes: "Existing posture in ADR-0002 / ADR-0003. Promote to formal NFR with measurable check in #79."
+    status: partial
+    notes: "Posture from ADR-0002 / ADR-0003 catalogued by #79; promote to ruff custom rule in #80."
 
   - id: NFR-SEC-2
     kind: non-functional
@@ -2355,14 +2355,14 @@ requirements:
     title: "FastAPI surface does not leak credentials in errors / openapi spec"
     spec:
       file: docs/requirements/non-functional.md
-      section: "NFR-SEC-2 placeholder"
+      section: "## Security / NFR-SEC-2"
     target:
       metric: "no credential strings in openapi.json or 4xx/5xx responses"
-      threshold: "TBD (Task #79)"
+      threshold: "0 credential-shaped substrings in openapi.json or 4xx/5xx responses"
       measurement: "schemathesis + linter (Task #89)"
     types: []
     tests: []
-    status: deferred
+    status: partial
     notes: ""
 
   - id: NFR-REL-1
@@ -2469,14 +2469,14 @@ requirements:
     title: "DuckDB store handles 1M MarketPoints / 100k Issuers without quadratic blowup"
     spec:
       file: docs/requirements/non-functional.md
-      section: "NFR-SCALE-1 placeholder"
+      section: "## Scalability / NFR-SCALE-1"
     target:
       metric: "list_all_market_points + filings_for at 1M points / 100k issuers"
-      threshold: "TBD (Task #79)"
+      threshold: "<= 2s for list_all_market_points; <= 50ms p95 for filings_for at 1M points / 100k issuers"
       measurement: "perf bench (Task #89)"
     types: []
     tests: []
-    status: deferred
+    status: partial
     notes: ""
 
   - id: NFR-COMPAT-1
@@ -2566,10 +2566,10 @@ requirements:
     title: "LLM monthly token budget (subscription mode)"
     spec:
       file: docs/requirements/non-functional.md
-      section: "NFR-COST-1 placeholder"
+      section: "## Cost / NFR-COST-1"
     target:
       metric: "aggregate tokens consumed per calendar month per provider"
-      threshold: "TBD per subscription tier (Task #79)"
+      threshold: "TBD per subscription tier (deferred to production-deployment phase; tracked in NFR-COST-1)"
       measurement: "EventLog rollup; future telemetry sink"
     types: []
     tests: []
@@ -2632,14 +2632,14 @@ requirements:
     title: "ESM-only / ASCII paths / no platform-specific syscalls in core code"
     spec:
       file: docs/requirements/non-functional.md
-      section: "NFR-PORT-1 placeholder"
+      section: "## Portability / NFR-PORT-1"
     target:
       metric: "tests pass on Linux + macOS CI matrix"
       threshold: "0 platform-specific failures"
       measurement: "CI matrix (Task #79)"
     types: []
     tests: []
-    status: deferred
+    status: formalized
     notes: ""
 
   - id: NFR-PORT-2
