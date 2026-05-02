@@ -44,6 +44,10 @@ api = [
 # CAQRS wrapper — see docstrings in caqrs.data.yfinance.client.
 yfinance = ["yfinance>=0.2.40,<1"]
 
+# DuckDB-backed persistent EntityStore. Install with: pip install
+# caqrs[entities].
+entities = ["duckdb>=1.0,<2"]
+
 [project.urls]
 Homepage = "https://github.com/niraiarin/caqrs"
 Issues = "https://github.com/niraiarin/caqrs/issues"
@@ -74,6 +78,8 @@ dev = [
     # yfinance lib itself. Pin in dev so `uv sync` pulls them without
     # --extra yfinance.
     "yfinance>=0.2.40,<1",
+    # Persistent EntityStore tests need DuckDB in dev without --extra entities.
+    "duckdb>=1.0,<2",
 ]
 
 # === ruff ===
@@ -148,6 +154,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "yfinance"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "duckdb"
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]
