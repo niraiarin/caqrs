@@ -22,7 +22,7 @@
 #   #80 -- @traces pytest marker + CI registry consistency check.
 #   #89 -- perf bench harness (turns NFR-PERF-* placeholders into gates).
 
-version: 3
+version: 4
 generated_at: "2026-05-02"
 
 requirements:
@@ -2954,3 +2954,119 @@ requirements:
     tests: []
     status: deferred
     notes: "Phase E3 Hypothesis-driven; implementation pending #85"
+  # LIVE-BROKER SAFETY (P4 prerequisite). Spec at
+  # docs/decisions/0008-live-broker-safety.md. All deferred until P4
+  # implementation lands; Task #87 contract test suite fills tests[].
+  # =====================================================================
+
+  - id: NFR-LIVE-BROKER-1
+    kind: non-functional
+    subsystem: execution
+    title: "Live broker is opt-in via enable_live_orders flag with human approval workflow"
+    spec:
+      file: docs/decisions/0008-live-broker-safety.md
+      section: "NFR-LIVE-BROKER-1: Default-off"
+    target:
+      metric: "LiveBroker.execute() return status when enable_live_orders=False"
+      threshold: "ExecutionStatus.SKIPPED with reason 'live orders disabled'; flipping the flag requires explicit human approval (env var + one-time CLI confirm)"
+      measurement: "contract test suite (Task #87)"
+    types: []
+    tests: []
+    status: deferred
+    notes: "P4 implementation pending; #87 contract test suite first"
+
+  - id: NFR-LIVE-BROKER-2
+    kind: non-functional
+    subsystem: execution
+    title: "Live broker credentials isolated under LIVE_BROKER_* env var prefix"
+    spec:
+      file: docs/decisions/0008-live-broker-safety.md
+      section: "NFR-LIVE-BROKER-2: Credential isolation"
+    target:
+      metric: "static import audit of credential read sites"
+      threshold: "PaperBroker reads zero LIVE_BROKER_* env vars; LiveBroker reads zero JQUANTS_/EDINET_/etc. env vars; all live creds dotenvx-encrypted"
+      measurement: "scripts/check_credential_isolation.py (or extension of check_data_source_tos.py); gated by Task #88 lint"
+    types: []
+    tests: []
+    status: deferred
+    notes: "P4 implementation pending; #87 contract test suite first"
+
+  - id: NFR-LIVE-BROKER-3
+    kind: non-functional
+    subsystem: execution
+    title: "Dry-run parity: every live order pre-flight-simulated by PaperBroker"
+    spec:
+      file: docs/decisions/0008-live-broker-safety.md
+      section: "NFR-LIVE-BROKER-3: Dry-run parity"
+    target:
+      metric: "PaperBroker.execute(action, prices) status before any live submission"
+      threshold: "must be ExecutionStatus.FILLED; any non-FILLED rejects the live order and emits BROKER_LIVE_REJECTED"
+      measurement: "contract test suite (Task #87)"
+    types: []
+    tests: []
+    status: deferred
+    notes: "P4 implementation pending; #87 contract test suite first"
+
+  - id: NFR-LIVE-BROKER-4
+    kind: non-functional
+    subsystem: execution
+    title: "Deterministic idempotency key on every live order"
+    spec:
+      file: docs/decisions/0008-live-broker-safety.md
+      section: "NFR-LIVE-BROKER-4: Idempotency key on every order"
+    target:
+      metric: "idempotency key derivation for replay equivalence"
+      threshold: "sha256_hex((cycle_id, decision_run_id, ticker, side, quantity)); same inputs -> same key -> same broker behaviour"
+      measurement: "contract test suite (Task #87): replay test asserts identical key + identical order set"
+    types: []
+    tests: []
+    status: deferred
+    notes: "P4 implementation pending; #87 contract test suite first"
+
+  - id: NFR-LIVE-BROKER-5
+    kind: non-functional
+    subsystem: execution
+    title: "Kill-switch aborts in-flight orders within 1 cycle and refuses new orders until human re-enable"
+    spec:
+      file: docs/decisions/0008-live-broker-safety.md
+      section: "NFR-LIVE-BROKER-5: Kill-switch"
+    target:
+      metric: "time-to-abort after LiveBroker.kill_switch() invocation"
+      threshold: "<= 1 CycleRunner iteration; post-invocation execute() returns SKIPPED with reason 'kill switch engaged' until human re-enables via NFR-LIVE-BROKER-1 workflow"
+      measurement: "contract test suite (Task #87): API endpoint + signal handler invocation paths"
+    types: []
+    tests: []
+    status: deferred
+    notes: "P4 implementation pending; #87 contract test suite first"
+
+  - id: NFR-LIVE-BROKER-6
+    kind: non-functional
+    subsystem: execution
+    title: "Broker-level daily loss cap independent from PolicyGatewayConfig.daily_loss_limit_usd"
+    spec:
+      file: docs/decisions/0008-live-broker-safety.md
+      section: "NFR-LIVE-BROKER-6: Daily loss cap (defense in depth)"
+    target:
+      metric: "live_broker_daily_loss_cap_usd vs realized PnL"
+      threshold: "broker auto-engages kill_switch() and emits BROKER_LIVE_KILL_SWITCH when realized loss exceeds the broker-level cap; broker and gateway MUST NOT share state for this check"
+      measurement: "contract test suite (Task #87): independent state assertion + cap-breach trigger"
+    types: []
+    tests: []
+    status: deferred
+    notes: "P4 implementation pending; #87 contract test suite first"
+
+  - id: NFR-LIVE-BROKER-7
+    kind: non-functional
+    subsystem: execution
+    title: "Distinct CycleEventKind taxonomy for live broker (BROKER_LIVE_*)"
+    spec:
+      file: docs/decisions/0008-live-broker-safety.md
+      section: "NFR-LIVE-BROKER-7: Distinct event taxonomy"
+    target:
+      metric: "EventLog event kinds emitted by LiveBroker"
+      threshold: "uses BROKER_LIVE_SUBMITTED / BROKER_LIVE_FILLED / BROKER_LIVE_REJECTED / BROKER_LIVE_CANCELLED / BROKER_LIVE_KILL_SWITCH; never BROKER_EXECUTED (paper-only)"
+      measurement: "contract test suite (Task #87): grep BROKER_LIVE_ on EventLog from live-broker run"
+    types: []
+    tests: []
+    status: deferred
+    notes: "P4 implementation pending; #87 contract test suite first"
