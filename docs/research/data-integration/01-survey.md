@@ -36,7 +36,7 @@ Sequence over time:    {X_t, G_t}_{t=1..T}
 |---|---|---|
 | **FNSPID** | 株価 ~30M rows + ニュース ~16M items, time-aligned | https://arxiv.org/abs/2402.06698 |
 | **FinMultiTime** | 4-modal (price + news + financials + charts), long-horizon | https://arxiv.org/abs/2506.05019 |
-| **FinTextTS** | Text + price aligned for sentiment & forecast | (related family) |
+| **FinTexTS** | Text + price aligned for sentiment & forecast | (related family, no fixed citation) |
 
 Generic shape: `X_t = (P_t, N_t, F_t, M_t)` where `P_t` is price, `N_t` is news embedding,
 `F_t` is fundamentals, `M_t` is market structure.
@@ -289,6 +289,12 @@ each of those concrete.
 - **Cross-listing / ADR mapping** — single-venue (Tokyo + US separately) is enough for the
   current research roadmap.
 - **Real-time intraday feed** — CAQRS is daily / fundamentals scale by design.
+- **Path-integral / action-functional formulations** of price evolution
+  (`P(X_{t:T}) = ∫ exp(-S[events]) dμ`, seed §8 (B)) — interesting frontier but requires a
+  trained event-impact model we do not have. Tracked here only so the deferral is explicit.
+- **Causal-time-series formulations** combining SCM + Temporal KG (seed §8 (C)) — the
+  hypothesizer phase may eventually need this, but the EntityStore design must not bake in
+  any particular causal-inference assumption.
 
 These appear in the design spec as TODO holes with explicit "deferred until X" markers, so
 the type system surfaces them when a future slice needs them.
