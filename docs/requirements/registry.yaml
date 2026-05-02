@@ -22,7 +22,7 @@
 #   #80 -- @traces pytest marker + CI registry consistency check.
 #   #89 -- perf bench harness (turns NFR-PERF-* placeholders into gates).
 
-version: 2
+version: 3
 generated_at: "2026-05-02"
 
 requirements:
@@ -2691,3 +2691,266 @@ requirements:
     tests: []
     status: partial
     notes: ""
+
+  # =====================================================================
+  # ENT-RECON-* (Phase E3): reconciliation seed loaders.
+  # Spec at docs/research/data-integration/03-phase-e3-reconciliation.md.
+  # Status remains `deferred` until #85 lands the implementation; that PR
+  # will fill the empty `types`/`tests` lists and flip status to formalized.
+  # =====================================================================
+
+  - id: ENT-RECON-A1
+    kind: functional
+    subsystem: entities
+    title: "Reconciler accepts EntityStore + source client and returns ReconcilerResult"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§A row ENT-RECON-A1"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 implementation pending #85"
+
+  - id: ENT-RECON-A2
+    kind: functional
+    subsystem: entities
+    title: "Re-running reconciler on identical input is a no-op (idempotency)"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§A row ENT-RECON-A2"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 implementation pending #85"
+
+  - id: ENT-RECON-A3
+    kind: functional
+    subsystem: entities
+    title: "Each upsert carries Provenance(source, fetched_at UTC, payload_hash sha256)"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§A row ENT-RECON-A3"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 implementation pending #85"
+
+  - id: ENT-RECON-A4
+    kind: functional
+    subsystem: entities
+    title: "IdentifierConflictError is collected (not raised) into result.conflicts"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§A row ENT-RECON-A4"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 implementation pending #85"
+
+  - id: ENT-RECON-A5
+    kind: functional
+    subsystem: entities
+    title: "dry_run=True walks the source but never mutates the store"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§A row ENT-RECON-A5"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 implementation pending #85"
+
+  - id: ENT-RECON-A6
+    kind: functional
+    subsystem: entities
+    title: "Source-specific id taxonomy: J-Quants emits JQUANTS_CODE+SEC_CODE; EDINETDB emits EDINET_CODE+JCN+SEC_CODE"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§A row ENT-RECON-A6"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 implementation pending #85"
+
+  # --- ENT-RECON example tests (T20..T30) ---
+
+  - id: ENT-RECON-T20
+    kind: functional
+    subsystem: entities
+    title: "reconcile_from_jquants_master happy path: 3 rows yield 3 upserts with JQUANTS_CODE+SEC_CODE"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§B test list ENT-RECON-T20"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 implementation pending #85"
+
+  - id: ENT-RECON-T21
+    kind: functional
+    subsystem: entities
+    title: "reconcile_from_edinetdb_companies paginates 1200 rows over 3 pages of 500"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§B test list ENT-RECON-T21"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 implementation pending #85"
+
+  - id: ENT-RECON-T22
+    kind: functional
+    subsystem: entities
+    title: "reconcile_from_gleif_lei placeholder (deferred to Phase E5)"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§B test list ENT-RECON-T22"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 placeholder; real implementation deferred to Phase E5"
+
+  - id: ENT-RECON-T23
+    kind: functional
+    subsystem: entities
+    title: "Idempotent re-run: second invocation reports upserted=0, skipped=N, store unchanged"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§B test list ENT-RECON-T23"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 implementation pending #85"
+
+  - id: ENT-RECON-T24
+    kind: functional
+    subsystem: entities
+    title: "Provenance population uses fixed fetched_at and sha256(canonical_json(record)) payload_hash"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§B test list ENT-RECON-T24"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 implementation pending #85"
+
+  - id: ENT-RECON-T25
+    kind: functional
+    subsystem: entities
+    title: "Conflict handling: collides identifier appended to result.conflicts and not persisted"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§B test list ENT-RECON-T25"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 implementation pending #85"
+
+  - id: ENT-RECON-T26
+    kind: functional
+    subsystem: entities
+    title: "dry_run=True returns planned upsert count and leaves store unchanged"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§B test list ENT-RECON-T26"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 implementation pending #85"
+
+  - id: ENT-RECON-T27
+    kind: functional
+    subsystem: entities
+    title: "J-Quants row populates exactly (JQUANTS_CODE 5-digit) + (SEC_CODE 4-digit)"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§B test list ENT-RECON-T27"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 implementation pending #85"
+
+  - id: ENT-RECON-T28
+    kind: functional
+    subsystem: entities
+    title: "EDINET DB row with edinet+jcn+sec populates EDINET_CODE+JCN+SEC_CODE"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§B test list ENT-RECON-T28"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 implementation pending #85"
+
+  - id: ENT-RECON-T29
+    kind: functional
+    subsystem: entities
+    title: "EDINET DB row with edinet only (jcn=None, sec_code=None) emits exactly one identifier"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§B test list ENT-RECON-T29"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 implementation pending #85; partial-data scenario"
+
+  - id: ENT-RECON-T30
+    kind: functional
+    subsystem: entities
+    title: "Batch boundaries + transient errors: 1500 rows / 500 per page; client-level retry only"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§B test list ENT-RECON-T30"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 implementation pending #85"
+
+  # --- ENT-RECON property tests (P6..P9) ---
+
+  - id: ENT-RECON-P6
+    kind: functional
+    subsystem: entities
+    title: "Property: idempotency under repeated runs (run twice == run once)"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§B property ENT-RECON-P6"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 Hypothesis-driven; implementation pending #85"
+
+  - id: ENT-RECON-P7
+    kind: functional
+    subsystem: entities
+    title: "Property: source-order independence within a single run"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§B property ENT-RECON-P7"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 Hypothesis-driven; implementation pending #85"
+
+  - id: ENT-RECON-P8
+    kind: functional
+    subsystem: entities
+    title: "Property: no silent issuer merges across runs of disjoint records"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§B property ENT-RECON-P8"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 Hypothesis-driven; implementation pending #85"
+
+  - id: ENT-RECON-P9
+    kind: functional
+    subsystem: entities
+    title: "Property: conflict-determinism (same input always produces same conflict messages)"
+    spec:
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§B property ENT-RECON-P9"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3 Hypothesis-driven; implementation pending #85"
