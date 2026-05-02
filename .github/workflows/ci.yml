@@ -56,3 +56,28 @@ jobs:
           name: coverage-${{ matrix.os }}-${{ matrix.python }}
           path: coverage.xml
         if: always()
+
+  # Performance smoke benchmarks (NFR-PERF-1, NFR-PERF-3). Task #89 lands
+  # this as a separate, non-blocking job: `continue-on-error: true` keeps
+  # CI green while we collect ~1 week of stable baselines on the GitHub
+  # runner before we promote it to a blocking gate. Runs only after the
+  # main `test` matrix passes, so a real bug fails the blocking job first.
+  perf:
+    name: Performance benchmarks
+    runs-on: ubuntu-latest
+    needs: [test]
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync deps
+        run: uv sync --frozen
+
+      - name: Run perf benchmarks
+        run: uv run --frozen pytest -m perf --benchmark-only --benchmark-disable-gc
