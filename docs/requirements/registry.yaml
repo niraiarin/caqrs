@@ -2636,11 +2636,11 @@ requirements:
     target:
       metric: "tests pass on Linux + macOS CI matrix"
       threshold: "0 platform-specific failures"
-      measurement: "CI matrix (Task #79)"
+      measurement: "CI matrix (.github/workflows/ci.yml: macos-latest + ubuntu-latest x py3.12 + py3.13)"
     types: []
     tests: []
-    status: formalized
-    notes: ""
+    status: partial
+    notes: "Enforced by .github/workflows/ci.yml matrix, not by a pytest case. Promotion to formalized requires either a meta-test that introspects CI workflow YAML or a pytest plugin that fails on unsupported platforms."
 
   - id: NFR-PORT-2
     kind: non-functional
