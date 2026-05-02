@@ -51,8 +51,10 @@ def test_pydantic_models_are_frozen() -> None:
 
     with pytest.raises(ValidationError):
         # setattr bypasses mypy's read-only enforcement so the test can
-        # exercise the runtime frozen-model guard.
-        setattr(issuer, "display_name", "Toyota Motor")
+        # exercise the runtime frozen-model guard. Direct assignment
+        # would type-error on the frozen field; B010 wants direct
+        # assignment back, so the suppression is local and intentional.
+        setattr(issuer, "display_name", "Toyota Motor")  # noqa: B010
 
 
 def test_provenance_rejects_non_sha256_payload_hash() -> None:
