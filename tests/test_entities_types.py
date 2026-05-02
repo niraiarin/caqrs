@@ -40,6 +40,19 @@ def test_issuer_rejects_malformed_jcn() -> None:
         )
 
 
+def test_pydantic_models_are_frozen() -> None:
+    issuer = Issuer(
+        id="I0123456789abcdef",
+        lei=None,
+        jcn=None,
+        display_name="Toyota Motor Corporation",
+        identifiers=(),
+    )
+
+    with pytest.raises(ValidationError):
+        issuer.display_name = "Toyota Motor"
+
+
 def test_provenance_rejects_non_sha256_payload_hash() -> None:
     with pytest.raises(ValidationError):
         Provenance(

@@ -11,6 +11,7 @@ import pytest
 from pydantic_core import to_json
 
 from caqrs.entities import (
+    ConflictRecord,
     Filing,
     Identifier,
     IdentifierConflictError,
@@ -72,6 +73,28 @@ def test_upsert_rejects_identifier_registered_to_different_issuer() -> None:
 
     with pytest.raises(IdentifierConflictError):
         store.upsert_issuer(issuer=other)
+
+
+def test_identifier_conflict_error_exposes_payload_fields() -> None:
+    store = InMemoryEntityStore()
+    toyota = _toyota()
+    store.upsert_issuer(issuer=toyota)
+    other_issuer = Issuer(
+        id="I0000000000000002",
+        lei=None,
+        jcn=None,
+        display_name="Other",
+        identifiers=(Identifier(kind=IdentifierKind.JQUANTS_CODE, value="72030"),),
+    )
+
+    with pytest.raises(IdentifierConflictError) as exc_info:
+        store.upsert_issuer(issuer=other_issuer)
+
+    error = exc_info.value
+    assert error.kind == IdentifierKind.JQUANTS_CODE
+    assert error.value == "72030"
+    assert error.existing_issuer_id == toyota.id
+    assert error.proposed_issuer_id == other_issuer.id
 
 
 def test_market_series_uses_jquants_when_priority_covers_whole_range() -> None:
@@ -148,6 +171,40 @@ def test_market_series_falls_back_to_yfinance_for_uncovered_days() -> None:
     assert series.conflict_log == ()
 
 
+def test_t6_conflict_log_records_disagreed_points() -> None:
+    store = _store_with_toyota()
+    timestamp = datetime(2025, 6, 2, tzinfo=UTC)
+    higher_priority = _point(Source.JQUANTS, timestamp, Decimal("100"))
+    lower_priority = _point(Source.YFINANCE, timestamp, Decimal("101"))
+    store.append_market_points(
+        issuer_id=_TOYOTA_ID,
+        kind=MarketSeriesKind.DAILY_CLOSE,
+        points=(higher_priority,),
+    )
+    store.append_market_points(
+        issuer_id=_TOYOTA_ID,
+        kind=MarketSeriesKind.DAILY_CLOSE,
+        points=(lower_priority,),
+    )
+
+    series = store.get_market_series(
+        issuer_id=_TOYOTA_ID,
+        kind=MarketSeriesKind.DAILY_CLOSE,
+        range_=(timestamp, timestamp),
+        source_priority=(Source.JQUANTS, Source.YFINANCE),
+    )
+
+    assert series.conflict_log == (
+        ConflictRecord(
+            timestamp=timestamp,
+            chosen=higher_priority,
+            discarded=(lower_priority,),
+        ),
+    )
+    assert series.conflict_log[0].chosen == higher_priority
+    assert series.conflict_log[0].discarded == (lower_priority,)
+
+
 def test_append_market_points_rejects_unknown_issuer() -> None:
     store = InMemoryEntityStore()
 
@@ -157,6 +214,14 @@ def test_append_market_points_rejects_unknown_issuer() -> None:
             kind=MarketSeriesKind.DAILY_CLOSE,
             points=(_point(Source.JQUANTS, datetime(2025, 6, 1, tzinfo=UTC), Decimal("1")),),
         )
+
+
+def test_append_filing_with_unknown_issuer_raises() -> None:
+    store = InMemoryEntityStore()
+    filing = _filing(doc_id="S1000001", submitted_at=datetime(2025, 6, 1, 1, tzinfo=UTC))
+
+    with pytest.raises(UnknownIssuerError):
+        store.append_filing(filing=filing)
 
 
 def test_append_filing_then_filings_for_returns_filing() -> None:
@@ -212,16 +277,33 @@ def test_subsidiaries_of_excludes_relation_on_exclusive_end_date() -> None:
     )
 
 
+def test_append_relation_with_unknown_issuer_raises() -> None:
+    store = InMemoryEntityStore()
+    store.upsert_issuer(issuer=_issuer(_A_ID, "A"))
+    relation = Relation(
+        from_id=_A_ID,
+        to_id=_B_ID,
+        kind=RelationKind.SUBSIDIARY_OF,
+        valid_from=datetime(2020, 4, 1, tzinfo=UTC),
+        valid_to=datetime(2024, 4, 1, tzinfo=UTC),
+        provenance=_provenance(Source.EDINET),
+    )
+
+    with pytest.raises(UnknownIssuerError):
+        store.append_relation(relation=relation)
+
+
 def test_market_point_provenance_preserves_jquants_payload_hash() -> None:
     store = _store_with_toyota()
     original_response = {"daily_quotes": [{"Code": "72030", "Date": "2025-06-02", "Close": "1"}]}
     payload_hash = hashlib.sha256(to_json(original_response)).hexdigest()
+    fetched_at = datetime(2025, 6, 3, tzinfo=UTC)
     point = MarketPoint(
         timestamp=datetime(2025, 6, 2, tzinfo=UTC),
         value=Decimal("1"),
         provenance=Provenance(
             source=Source.JQUANTS,
-            fetched_at=datetime(2025, 6, 3, tzinfo=UTC),
+            fetched_at=fetched_at,
             payload_hash=payload_hash,
         ),
     )
@@ -240,6 +322,7 @@ def test_market_point_provenance_preserves_jquants_payload_hash() -> None:
 
     assert series.points[0].provenance.source == Source.JQUANTS
     assert series.points[0].provenance.payload_hash == payload_hash
+    assert series.points[0].provenance.fetched_at == fetched_at
 
 
 def _toyota() -> Issuer:

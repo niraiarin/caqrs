@@ -145,6 +145,56 @@ def test_relation_half_open_interval(start_day: int, duration: int) -> None:
     assert store.relations_for(issuer_id=source.id, at=valid_to) == ()
 
 
+@given(
+    valid_from=st.datetimes(
+        min_value=datetime(2020, 1, 2),
+        max_value=datetime(2026, 12, 1),
+        timezones=st.just(UTC),
+    ),
+    duration=st.timedeltas(
+        min_value=timedelta(days=2),
+        max_value=timedelta(days=30),
+    ),
+    sampled_at=st.datetimes(
+        min_value=datetime(2020, 1, 1),
+        max_value=datetime(2027, 12, 31),
+        timezones=st.just(UTC),
+    ),
+)
+def test_relations_for_returns_relation_iff_at_is_inside_half_open_interval(
+    valid_from: datetime,
+    duration: timedelta,
+    sampled_at: datetime,
+) -> None:
+    store = InMemoryEntityStore()
+    source = _issuer("I0000000000000008", ())
+    target = _issuer("I0000000000000009", ())
+    store.upsert_issuer(issuer=source)
+    store.upsert_issuer(issuer=target)
+    valid_to = valid_from + duration
+    relation = Relation(
+        from_id=source.id,
+        to_id=target.id,
+        kind=RelationKind.SUBSIDIARY_OF,
+        valid_from=valid_from,
+        valid_to=valid_to,
+        provenance=_provenance(Source.EDINET),
+    )
+    store.append_relation(relation=relation)
+
+    sample_points = (
+        valid_from - timedelta(microseconds=1),
+        valid_from,
+        valid_from + (duration / 2),
+        valid_to,
+        valid_to + timedelta(microseconds=1),
+        sampled_at,
+    )
+    for at in sample_points:
+        expected = (relation,) if valid_from <= at < valid_to else ()
+        assert store.relations_for(issuer_id=source.id, at=at) == expected
+
+
 @given(seed=st.integers(min_value=1, max_value=9999))
 def test_merge_issuers_unions_disjoint_identifiers_idempotently(seed: int) -> None:
     store = InMemoryEntityStore()
