@@ -21,6 +21,10 @@ typecheck:
 traceability:
     uv run --with pyyaml python scripts/check_traceability.py
 
+# Verify every data source has a LICENSE_AND_TOS.md entry
+tos:
+    python scripts/check_data_source_tos.py
+
 # === Tests ===
 test:
     uv run pytest
@@ -29,7 +33,7 @@ test-cov:
     uv run pytest --cov=caqrs --cov-report=term-missing
 
 # === Aggregate ===
-ci: fmt-check lint typecheck traceability test
+ci: fmt-check lint typecheck traceability tos test
     @echo "All CI checks passed."
 
 # === Local dev ===

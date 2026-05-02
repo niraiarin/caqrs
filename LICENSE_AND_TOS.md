@@ -1,12 +1,54 @@
 # Data source license & ToS audit
 
 This document tracks the legal status of every data source CAQRS ingests.
-**It must be kept up to date** — a future CI lint will fail builds when a
-new data source appears in `src/` without a corresponding entry here.
+**It must be kept up to date** — `scripts/check_data_source_tos.py` runs in
+CI and fails the build when a new package appears under
+`src/caqrs/data/<source>/` without a corresponding row in the table below.
 
-| Source       | Type | License / ToS | Allowed use | Rate limits | Last reviewed |
-| ------------ | ---- | ------------- | ----------- | ----------- | ------------- |
-| _(none yet — P0 has no data ingestion; first entries land in P1)_                                  |
+## Currently integrated
+
+| Source              | Type                            | License / ToS                                                                                            | Allowed use                                                                | Rate limits                                                                          | Last reviewed |
+| ------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------- |
+| **edinet**          | Government API (JFSA)           | [EDINET API v2 terms](https://api.edinet-fsa.go.jp/) — public disclosure data, free Subscription-Key tier | Research, redistribution of derivative analyses with source attribution    | No published per-second cap; client uses default `AsyncRateLimiter` (no pacing)       | 2026-05-02    |
+| **edinetdb**        | Third-party hosted API          | [edinetdb.jp Terms of Service](https://edinetdb.jp/) — `# review` confirm commercial-use clause          | Research; commercial use TBD `# review`                                    | Free plan: **100 req/day** (hard daily quota enforced via `DailyQuotaTracker`)        | 2026-05-02    |
+| **jquants**         | Vendor API (JPX-official)       | [J-Quants Terms of Use](https://jpx-jquants.com/) — `# review` confirm exact ToS URL                     | Research on free tier; commercial / redistribution requires paid plan      | Free tier: **5 req/min** (12 s `min_interval_seconds`), 2-year history, 12-week delay | 2026-05-02    |
+| **polymarket**      | Public REST API (CLOB + Gamma)  | [Polymarket Terms of Service](https://polymarket.com/tos) — `# review` confirm data-redistribution stance | Research; on-chain prediction-market data is publicly observable           | No published per-second cap; default limiter `min_interval_seconds=0.0` (unpaced)    | 2026-05-02    |
+| **polymarket_archive** | Community parquet mirror     | [archive.pmxt.dev](https://archive.pmxt.dev/Polymarket/) — third-party mirror of public CLOB events `# review` | Research; mirror operator's terms TBD `# review`                          | No published cap; files are 100-400 MB hourly snapshots, fetched & cached locally     | 2026-05-02    |
+| **yfinance**        | Library wrapper (Yahoo Finance) | [Yahoo Terms of Service](https://legal.yahoo.com/us/en/yahoo/terms/otos/index.html) — personal-use only  | Personal / research only; **no commercial use without separate license**   | No official limit; client treats 3 consecutive empty responses as quota exhaustion    | 2026-05-02    |
+
+Rows tagged `# review` need a human ToS reviewer to confirm the link target
+and clause interpretation before any commercial deployment. The lint
+script does not validate URL contents — that is a human gate.
+
+## Recently integrated
+
+For traceability, mapping each table row to its CAQRS module and observer
+helper:
+
+- **edinet** — `caqrs.data.edinet` (`EdinetClient`,
+  `fetch_recent_filings`). Wraps the JFSA EDINET v2 endpoints
+  (`/documents.json`, `/documents/{docID}`) at
+  `https://api.edinet-fsa.go.jp/api/v2/`. Free Subscription-Key tier.
+- **edinetdb** — `caqrs.data.edinetdb` (`EdinetDbClient`,
+  `EdinetDbCache`, `DailyQuotaTracker`,
+  `fetch_edinetdb_company_fundamentals`). Hits
+  `https://edinetdb.jp/v1/` for pre-parsed financials with a TTL SQLite
+  cache and a persistent 100-req/day quota tracker.
+- **jquants** — `caqrs.data.jquants` (`JQuantsClient`,
+  `fetch_jquants_asset_snapshot`). Hits `https://api.jquants.com/v2/`
+  with a 12-second `min_interval_seconds` to stay under the free 5
+  req/min cap.
+- **polymarket** — `caqrs.data.polymarket` (`PolymarketClobClient`,
+  `PolymarketGammaClient`, `fetch_polymarket_signal`). Read-only against
+  `https://clob.polymarket.com` and `https://gamma-api.polymarket.com`.
+- **polymarket_archive** — `caqrs.data.polymarket_archive`
+  (`PolymarketArchiveClient`, `load_events`). Hourly parquet snapshots
+  from `https://r2v2.pmxt.dev`; ships behind the `archive` extra because
+  `polars` is heavy.
+- **yfinance** — `caqrs.data.yfinance` (`YFinanceClient`,
+  `YFinanceCache`, `fetch_yfinance_asset_snapshot`). Async wrapper around
+  the `yfinance` library with a per-process tz cache and empty-vs-rate-
+  limited disambiguation.
 
 ## Review checklist
 
@@ -20,15 +62,16 @@ When adding a new data source, fill in:
 - [ ] Personal data / GDPR considerations (PRAW exposes pseudonymous user data).
 - [ ] Last reviewed date and reviewer name.
 
-## Data sources currently planned (not yet integrated)
+## Deferred (not yet integrated)
 
-For traceability — these will land in P1+ and get full entries above when they do.
+Forward-looking entries the lint accepts as "extras" — they document
+sources we expect to integrate but haven't yet:
 
-- **yfinance** — wrapper around Yahoo Finance public endpoints. Personal-use
-  ToS only; requires re-evaluation before any commercial offering.
 - **FRED** — Federal Reserve Economic Data API. Free, requires API key.
-- **PRAW (Reddit)** — Reddit API for SNS sentiment. ToS imposes commercial-use
-  restrictions; pseudonymous data is in scope of GDPR-equivalent regulations.
-- **GDELT** — global news event dataset. Permissive license, attribution required.
-- **X (Twitter)** — deferred. API costs and ToS restrictions are prohibitive
-  for early prototyping.
+- **PRAW (Reddit)** — Reddit API for SNS sentiment. ToS imposes
+  commercial-use restrictions; pseudonymous data is in scope of
+  GDPR-equivalent regulations.
+- **GDELT** — global news event dataset. Permissive license, attribution
+  required.
+- **X (Twitter)** — deferred. API costs and ToS restrictions are
+  prohibitive for early prototyping.
