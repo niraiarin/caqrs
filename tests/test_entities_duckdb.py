@@ -39,10 +39,12 @@ def store(tmp_path: Path) -> Iterator[DuckDbEntityStore]:
         yield entity_store
 
 
+@pytest.mark.traces("ENT-A1", "ENT-T1")
 def test_empty_store_lookup_returns_none(store: DuckDbEntityStore) -> None:
     assert store.lookup_issuer(kind=IdentifierKind.JQUANTS_CODE, value="72030") is None
 
 
+@pytest.mark.traces("ENT-A1", "ENT-T2")
 def test_lookup_by_each_toyota_identifier_returns_same_issuer(
     store: DuckDbEntityStore,
 ) -> None:
@@ -54,6 +56,7 @@ def test_lookup_by_each_toyota_identifier_returns_same_issuer(
     assert store.lookup_issuer(kind=IdentifierKind.YFINANCE_TICKER, value="7203.T") == issuer
 
 
+@pytest.mark.traces("ENT-A2", "ENT-T3")
 def test_lookup_by_jcn_then_lei_returns_equal_issuer(store: DuckDbEntityStore) -> None:
     issuer = _toyota()
     store.upsert_issuer(issuer=issuer)
@@ -64,6 +67,7 @@ def test_lookup_by_jcn_then_lei_returns_equal_issuer(store: DuckDbEntityStore) -
     assert via_jcn == via_lei == issuer
 
 
+@pytest.mark.traces("ENT-A3", "ENT-T4")
 def test_upsert_rejects_identifier_registered_to_different_issuer(
     store: DuckDbEntityStore,
 ) -> None:
@@ -80,6 +84,7 @@ def test_upsert_rejects_identifier_registered_to_different_issuer(
         store.upsert_issuer(issuer=other)
 
 
+@pytest.mark.traces("ENT-A3", "ENT-T4")
 def test_identifier_conflict_error_exposes_payload_fields(
     store: DuckDbEntityStore,
 ) -> None:
@@ -103,6 +108,7 @@ def test_identifier_conflict_error_exposes_payload_fields(
     assert error.proposed_issuer_id == other_issuer.id
 
 
+@pytest.mark.traces("ENT-A4", "ENT-T5")
 def test_market_series_uses_jquants_when_priority_covers_whole_range(
     store: DuckDbEntityStore,
 ) -> None:
@@ -142,6 +148,7 @@ def test_market_series_uses_jquants_when_priority_covers_whole_range(
     assert series.conflict_log == ()
 
 
+@pytest.mark.traces("ENT-A4", "ENT-T6")
 def test_market_series_falls_back_to_yfinance_for_uncovered_days(
     store: DuckDbEntityStore,
 ) -> None:
@@ -181,6 +188,7 @@ def test_market_series_falls_back_to_yfinance_for_uncovered_days(
     assert series.conflict_log == ()
 
 
+@pytest.mark.traces("ENT-A4", "ENT-T6")
 def test_t6_conflict_log_records_disagreed_points(store: DuckDbEntityStore) -> None:
     _store_with_toyota(store)
     timestamp = datetime(2025, 6, 2, tzinfo=UTC)
@@ -213,6 +221,7 @@ def test_t6_conflict_log_records_disagreed_points(store: DuckDbEntityStore) -> N
     )
 
 
+@pytest.mark.traces("ENT-A10")
 def test_append_market_points_rejects_unknown_issuer(store: DuckDbEntityStore) -> None:
     with pytest.raises(UnknownIssuerError):
         store.append_market_points(
@@ -229,6 +238,7 @@ def test_append_filing_with_unknown_issuer_raises(store: DuckDbEntityStore) -> N
         store.append_filing(filing=filing)
 
 
+@pytest.mark.traces("ENT-A5", "ENT-T7")
 def test_append_filing_then_filings_for_returns_filing(store: DuckDbEntityStore) -> None:
     _store_with_toyota(store)
     filing = _filing(doc_id="S1000001", submitted_at=datetime(2025, 6, 1, 1, tzinfo=UTC))
@@ -241,6 +251,7 @@ def test_append_filing_then_filings_for_returns_filing(store: DuckDbEntityStore)
     ) == (filing,)
 
 
+@pytest.mark.traces("ENT-A5", "ENT-T8")
 def test_corrective_filing_is_returned_in_submit_time_order(
     store: DuckDbEntityStore,
 ) -> None:
@@ -263,6 +274,7 @@ def test_corrective_filing_is_returned_in_submit_time_order(
     assert filings[1].parent_doc_id == original.doc_id
 
 
+@pytest.mark.traces("ENT-A6", "ENT-T9")
 def test_subsidiaries_of_returns_relation_active_on_last_effective_day(
     store: DuckDbEntityStore,
 ) -> None:
@@ -274,6 +286,7 @@ def test_subsidiaries_of_returns_relation_active_on_last_effective_day(
     ) == (store.get_issuer(issuer_id=_A_ID),)
 
 
+@pytest.mark.traces("ENT-A6", "ENT-T10")
 def test_subsidiaries_of_excludes_relation_on_exclusive_end_date(
     store: DuckDbEntityStore,
 ) -> None:
@@ -288,6 +301,7 @@ def test_subsidiaries_of_excludes_relation_on_exclusive_end_date(
     )
 
 
+@pytest.mark.traces("ENT-A11")
 def test_append_relation_with_unknown_issuer_raises(store: DuckDbEntityStore) -> None:
     store.upsert_issuer(issuer=_issuer(_A_ID, "A"))
     relation = Relation(
@@ -303,6 +317,7 @@ def test_append_relation_with_unknown_issuer_raises(store: DuckDbEntityStore) ->
         store.append_relation(relation=relation)
 
 
+@pytest.mark.traces("ENT-A8", "ENT-T12")
 def test_market_point_provenance_preserves_jquants_payload_hash(
     store: DuckDbEntityStore,
 ) -> None:
@@ -337,6 +352,7 @@ def test_market_point_provenance_preserves_jquants_payload_hash(
     assert series.points[0].provenance.fetched_at == fetched_at
 
 
+@pytest.mark.traces("ENT-A7", "ENT-T11")
 def test_t11_round_trip_persists_graph_for_fresh_store(tmp_path: Path) -> None:
     path = tmp_path / "store.duckdb"
     toyota = _toyota()

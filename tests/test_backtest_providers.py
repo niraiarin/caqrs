@@ -227,6 +227,7 @@ async def test_price_provider_passes_window_to_jquants() -> None:
 # === make_jquants_buy_and_hold_executor end-to-end ===
 
 
+@pytest.mark.traces("BACKTEST-A5")
 @pytest.mark.asyncio
 @respx.mock
 async def test_executor_runs_full_pipeline_against_mocked_jquants() -> None:

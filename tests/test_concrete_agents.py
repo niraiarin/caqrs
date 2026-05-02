@@ -364,6 +364,7 @@ def test_auditor_input_is_frozen() -> None:
 # === Cross-agent plumbing ===
 
 
+@pytest.mark.traces("AGENT-PIPELINE-1")
 def test_pipeline_input_output_chain_compiles() -> None:
     """The five agents type-chain end-to-end. This is a compile-only check
     using ``isinstance`` to confirm output types match downstream input

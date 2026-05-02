@@ -41,6 +41,9 @@ jobs:
       - name: Type check
         run: uv run mypy src tests
 
+      - name: Check requirement traceability
+        run: uv run --with pyyaml python scripts/check_traceability.py
+
       - name: Test
         run: uv run pytest --cov=caqrs --cov-report=xml
 

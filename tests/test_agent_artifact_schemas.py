@@ -49,6 +49,7 @@ def make_meta(now: datetime, agent: str = "test-agent") -> RunMetadata:
 # === ObserverInput ===
 
 
+@pytest.mark.traces("AGENT-OBS-A1")
 def test_observer_input_roundtrip() -> None:
     obs_input = ObserverInput(
         universe=("AAPL", "MSFT"),

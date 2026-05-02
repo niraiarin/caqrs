@@ -21,6 +21,8 @@ import time
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from caqrs.data.edinetdb.cache import (
     DEFAULT_COMPANIES_TTL_SECONDS,
     DEFAULT_FINANCIALS_TTL_SECONDS,
@@ -120,6 +122,7 @@ def test_cache_creates_db_lazily(tmp_path: Path) -> None:
 # === Companies round-trip ===
 
 
+@pytest.mark.traces("DATA-EDB-A3")
 def test_companies_round_trips(tmp_path: Path) -> None:
     cache = EdinetDbCache(db_path=tmp_path / "c.db")
     listing = EdinetDbCompaniesList(

@@ -120,6 +120,7 @@ async def test_cache_hits_do_not_count_against_quota(tmp_path: Path) -> None:
 # === Pre-exhausted tracker blocks further HTTP ===
 
 
+@pytest.mark.traces("DATA-EDB-A4")
 @pytest.mark.asyncio
 async def test_quota_exhausted_blocks_http_before_dispatch(tmp_path: Path) -> None:
     """Pre-fill the tracker to the cap. The next call must raise

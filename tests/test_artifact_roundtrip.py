@@ -86,6 +86,7 @@ def make_meta(now: datetime, agent: str = "test-agent") -> RunMetadata:
 # === RunMetadata ===
 
 
+@pytest.mark.traces("CYCLE-A10")
 @settings(max_examples=50)
 @given(meta=run_metadata())
 def test_run_metadata_roundtrip(meta: RunMetadata) -> None:

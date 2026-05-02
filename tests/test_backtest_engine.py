@@ -92,6 +92,7 @@ def _constant_signals(*, dates: list[str], ticker: str, weight: float) -> pl.Dat
 # === Single fold ===
 
 
+@pytest.mark.traces("BACKTEST-A1")
 def test_walk_forward_single_fold_flat_prices_yields_zero_pnl() -> None:
     dates = [f"2025-01-{d:02d}" for d in range(1, 11)]  # 10 days
     plan = _plan(

@@ -17,6 +17,10 @@ fmt-check:
 typecheck:
     uv run mypy src tests
 
+# Check that registry <-> test-suite traces are consistent
+traceability:
+    uv run --with pyyaml python scripts/check_traceability.py
+
 # === Tests ===
 test:
     uv run pytest
@@ -25,7 +29,7 @@ test-cov:
     uv run pytest --cov=caqrs --cov-report=term-missing
 
 # === Aggregate ===
-ci: fmt-check lint typecheck test
+ci: fmt-check lint typecheck traceability test
     @echo "All CI checks passed."
 
 # === Local dev ===

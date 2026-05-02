@@ -107,6 +107,7 @@ def _ranking_payload() -> dict[str, object]:
 # === list_companies ===
 
 
+@pytest.mark.traces("DATA-EDB-A5")
 @pytest.mark.asyncio
 @respx.mock
 async def test_list_companies_writes_to_cache_on_miss(tmp_path: Path) -> None:
