@@ -50,7 +50,9 @@ def test_pydantic_models_are_frozen() -> None:
     )
 
     with pytest.raises(ValidationError):
-        issuer.display_name = "Toyota Motor"
+        # setattr bypasses mypy's read-only enforcement so the test can
+        # exercise the runtime frozen-model guard.
+        setattr(issuer, "display_name", "Toyota Motor")
 
 
 def test_provenance_rejects_non_sha256_payload_hash() -> None:
