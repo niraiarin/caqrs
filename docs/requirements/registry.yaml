@@ -1,0 +1,2693 @@
+# Traceability registry for caqrs requirements.
+#
+# This is the single source of truth that maps stable REQ-IDs to:
+#   - the spec section that defines them,
+#   - the Pydantic types that encode them,
+#   - the tests that exercise them,
+#   - and the formalization status (formalized / partial / tacit / deferred).
+#
+# Conventions:
+#   * functional REQ-IDs are prefixed by subsystem (ENT-*, GW-*, BROKER-*, ...).
+#   * non-functional REQ-IDs are prefixed NFR-<CATEGORY>-N (placeholders for #79).
+#   * `status: formalized` requires a concrete spec, types, and tests.
+#   * `tacit` means the contract is implicit in code/commit messages without a
+#     dedicated spec section. These are first-class candidates for promotion to
+#     formalized via a future ADR or spec amendment.
+#   * `partial` typically means: tests + types are in place, but the
+#     "spec" is a module docstring rather than a doc/markdown file or
+#     ADR. Promote to `formalized` by adding the missing spec section.
+#
+# Future tasks build on this file:
+#   #79 -- non-functional catalogue (fills measurable thresholds for NFR-* rows).
+#   #80 -- @traces pytest marker + CI registry consistency check.
+#   #89 -- perf bench harness (turns NFR-PERF-* placeholders into gates).
+
+version: 1
+generated_at: "2026-05-02"
+
+requirements:
+  # =====================================================================
+  # ENTITIES (Phase E1 + E2): canonical issuer / market series / filings /
+  # relations layer. Spec at docs/research/data-integration/02-design-spec-tydd.md.
+  # =====================================================================
+
+  - id: ENT-A1
+    kind: functional
+    subsystem: entities
+    title: "Lookup by source-specific id returns canonical Issuer or None"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§A row 1 (L25)"
+    types:
+      - src/caqrs/entities/types.py::Issuer
+      - src/caqrs/entities/types.py::Identifier
+      - src/caqrs/entities/types.py::IdentifierKind
+      - src/caqrs/entities/protocol.py::EntityStore.lookup_issuer
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_empty_store_lookup_returns_none, test_lookup_by_each_toyota_identifier_returns_same_issuer]
+      - path: tests/test_entities_duckdb.py
+        names: [test_empty_store_lookup_returns_none, test_lookup_by_each_toyota_identifier_returns_same_issuer]
+    status: formalized
+    notes: ""
+
+  - id: ENT-A2
+    kind: functional
+    subsystem: entities
+    title: "Same canonical Issuer is returned no matter which identifier is used"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§A row 2 (L26)"
+    types:
+      - src/caqrs/entities/protocol.py::EntityStore.lookup_issuer
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_lookup_by_jcn_then_lei_returns_equal_issuer]
+      - path: tests/test_entities_duckdb.py
+        names: [test_lookup_by_jcn_then_lei_returns_equal_issuer]
+    status: formalized
+    notes: ""
+
+  - id: ENT-A3
+    kind: functional
+    subsystem: entities
+    title: "Assigning the same external id to two Issuers is rejected at write time"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§A row 3 (L27)"
+    types:
+      - src/caqrs/entities/protocol.py::EntityStore.upsert_issuer
+      - src/caqrs/entities/errors.py::IdentifierConflictError
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_upsert_rejects_identifier_registered_to_different_issuer, test_identifier_conflict_error_exposes_payload_fields]
+      - path: tests/test_entities_duckdb.py
+        names: [test_upsert_rejects_identifier_registered_to_different_issuer, test_identifier_conflict_error_exposes_payload_fields]
+    status: formalized
+    notes: ""
+
+  - id: ENT-A4
+    kind: functional
+    subsystem: entities
+    title: "MarketSeries merges sources with deterministic priority + conflict log"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§A row 4 (L28)"
+    types:
+      - src/caqrs/entities/types.py::MarketSeries
+      - src/caqrs/entities/types.py::MarketSeriesKind
+      - src/caqrs/entities/types.py::ConflictRecord
+      - src/caqrs/entities/protocol.py::EntityStore.get_market_series
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_market_series_uses_jquants_when_priority_covers_whole_range, test_market_series_falls_back_to_yfinance_for_uncovered_days, test_t6_conflict_log_records_disagreed_points]
+      - path: tests/test_entities_duckdb.py
+        names: [test_market_series_uses_jquants_when_priority_covers_whole_range, test_market_series_falls_back_to_yfinance_for_uncovered_days, test_t6_conflict_log_records_disagreed_points]
+    status: formalized
+    notes: ""
+
+  - id: ENT-A5
+    kind: functional
+    subsystem: entities
+    title: "Filing event log is append-only and queryable by (issuer, range, doc_type)"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§A row 5 (L29)"
+    types:
+      - src/caqrs/entities/types.py::Filing
+      - src/caqrs/entities/protocol.py::EntityStore.append_filing
+      - src/caqrs/entities/protocol.py::EntityStore.filings_for
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_append_filing_then_filings_for_returns_filing, test_corrective_filing_is_returned_in_submit_time_order]
+      - path: tests/test_entities_duckdb.py
+        names: [test_append_filing_then_filings_for_returns_filing, test_corrective_filing_is_returned_in_submit_time_order]
+    status: formalized
+    notes: ""
+
+  - id: ENT-A6
+    kind: functional
+    subsystem: entities
+    title: "Relations carry half-open (valid_from, valid_to); subsidiaries_of(at) honours bounds"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§A row 6 (L30)"
+    types:
+      - src/caqrs/entities/types.py::Relation
+      - src/caqrs/entities/types.py::RelationKind
+      - src/caqrs/entities/protocol.py::EntityStore.subsidiaries_of
+      - src/caqrs/entities/protocol.py::EntityStore.relations_for
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_subsidiaries_of_returns_relation_active_on_last_effective_day, test_subsidiaries_of_excludes_relation_on_exclusive_end_date]
+      - path: tests/test_entities_duckdb.py
+        names: [test_subsidiaries_of_returns_relation_active_on_last_effective_day, test_subsidiaries_of_excludes_relation_on_exclusive_end_date]
+    status: formalized
+    notes: ""
+
+  - id: ENT-A7
+    kind: functional
+    subsystem: entities
+    title: "DuckDB-backed round-trip preserves Issuer + Identifier + MarketSeries + Filing + Relation graph"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§A row 7 (L31)"
+    types:
+      - src/caqrs/entities/duckdb.py::DuckDbEntityStore
+    tests:
+      - path: tests/test_entities_duckdb.py
+        names: [test_t11_round_trip_persists_graph_for_fresh_store]
+    status: formalized
+    notes: ""
+
+  - id: ENT-A8
+    kind: functional
+    subsystem: entities
+    title: "Every persisted record carries Provenance (source, fetched_at, payload_hash)"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§A row 8 (L32)"
+    types:
+      - src/caqrs/entities/types.py::Provenance
+      - src/caqrs/entities/types.py::Source
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_market_point_provenance_preserves_jquants_payload_hash]
+      - path: tests/test_entities_duckdb.py
+        names: [test_market_point_provenance_preserves_jquants_payload_hash]
+    status: formalized
+    notes: ""
+
+  - id: ENT-A9
+    kind: functional
+    subsystem: entities
+    title: "EntityStore.get_issuer returns Issuer by canonical id"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§A row 1 (L25)"
+    types:
+      - src/caqrs/entities/protocol.py::EntityStore.get_issuer
+      - src/caqrs/entities/types.py::Issuer
+      - src/caqrs/entities/types.py::IssuerId
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_subsidiaries_of_returns_relation_active_on_last_effective_day]
+      - path: tests/test_entities_duckdb.py
+        names: [test_subsidiaries_of_returns_relation_active_on_last_effective_day]
+    status: partial
+    notes: "covered indirectly via lookup_issuer / subsidiaries_of tests; no direct get_issuer assertion"
+
+  - id: ENT-A10
+    kind: functional
+    subsystem: entities
+    title: "EntityStore.append_market_points refuses unknown issuer"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§A row 8 (L32)"
+    types:
+      - src/caqrs/entities/protocol.py::EntityStore.append_market_points
+      - src/caqrs/entities/types.py::IssuerId
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_append_market_points_rejects_unknown_issuer]
+      - path: tests/test_entities_duckdb.py
+        names: [test_append_market_points_rejects_unknown_issuer]
+    status: formalized
+    notes: ""
+
+  - id: ENT-A11
+    kind: functional
+    subsystem: entities
+    title: "EntityStore.append_relation refuses unknown issuer"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§A row 8 (L32)"
+    types:
+      - src/caqrs/entities/protocol.py::EntityStore.append_relation
+      - src/caqrs/entities/types.py::Relation
+      - src/caqrs/entities/types.py::IssuerId
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_append_relation_with_unknown_issuer_raises]
+      - path: tests/test_entities_duckdb.py
+        names: [test_append_relation_with_unknown_issuer_raises]
+    status: formalized
+    notes: ""
+
+  # --- ENT test list (T1..T12) — covered by the same in-memory + duckdb pairs. ---
+
+  - id: ENT-T1
+    kind: functional
+    subsystem: entities
+    title: "Empty store: lookup by (Source.JQUANTS, '72030') returns None"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B test list T1 (L45)"
+    types:
+      - src/caqrs/entities/protocol.py::EntityStore.lookup_issuer
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_empty_store_lookup_returns_none]
+      - path: tests/test_entities_duckdb.py
+        names: [test_empty_store_lookup_returns_none]
+    status: formalized
+    notes: ""
+
+  - id: ENT-T2
+    kind: functional
+    subsystem: entities
+    title: "Toyota identifiers (JQUANTS / EDINET / YFINANCE) all resolve to the same Issuer"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B test list T2 (L46)"
+    types:
+      - src/caqrs/entities/protocol.py::EntityStore.lookup_issuer
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_lookup_by_each_toyota_identifier_returns_same_issuer]
+      - path: tests/test_entities_duckdb.py
+        names: [test_lookup_by_each_toyota_identifier_returns_same_issuer]
+    status: formalized
+    notes: ""
+
+  - id: ENT-T3
+    kind: functional
+    subsystem: entities
+    title: "JCN-then-LEI lookups return the same Issuer.id"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B test list T3 (L47)"
+    types:
+      - src/caqrs/entities/protocol.py::EntityStore.lookup_issuer
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_lookup_by_jcn_then_lei_returns_equal_issuer]
+      - path: tests/test_entities_duckdb.py
+        names: [test_lookup_by_jcn_then_lei_returns_equal_issuer]
+    status: formalized
+    notes: ""
+
+  - id: ENT-T4
+    kind: functional
+    subsystem: entities
+    title: "Re-registering an identifier for a different Issuer raises IdentifierConflictError"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B test list T4 (L48)"
+    types:
+      - src/caqrs/entities/errors.py::IdentifierConflictError
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_upsert_rejects_identifier_registered_to_different_issuer, test_identifier_conflict_error_exposes_payload_fields]
+      - path: tests/test_entities_duckdb.py
+        names: [test_upsert_rejects_identifier_registered_to_different_issuer, test_identifier_conflict_error_exposes_payload_fields]
+    status: formalized
+    notes: ""
+
+  - id: ENT-T5
+    kind: functional
+    subsystem: entities
+    title: "Series uses J-Quants when JQUANTS-priority covers whole range"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B test list T5 (L54)"
+    types:
+      - src/caqrs/entities/types.py::MarketSeries
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_market_series_uses_jquants_when_priority_covers_whole_range]
+      - path: tests/test_entities_duckdb.py
+        names: [test_market_series_uses_jquants_when_priority_covers_whole_range]
+    status: formalized
+    notes: ""
+
+  - id: ENT-T6
+    kind: functional
+    subsystem: entities
+    title: "yFinance fills uncovered days; conflict_log records disagreements"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B test list T6 (L55)"
+    types:
+      - src/caqrs/entities/types.py::ConflictRecord
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_market_series_falls_back_to_yfinance_for_uncovered_days, test_t6_conflict_log_records_disagreed_points]
+      - path: tests/test_entities_duckdb.py
+        names: [test_market_series_falls_back_to_yfinance_for_uncovered_days, test_t6_conflict_log_records_disagreed_points]
+    status: formalized
+    notes: ""
+
+  - id: ENT-T7
+    kind: functional
+    subsystem: entities
+    title: "append_filing then filings_for returns the filing"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B test list T7 (L61)"
+    types:
+      - src/caqrs/entities/protocol.py::EntityStore.append_filing
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_append_filing_then_filings_for_returns_filing]
+      - path: tests/test_entities_duckdb.py
+        names: [test_append_filing_then_filings_for_returns_filing]
+    status: formalized
+    notes: ""
+
+  - id: ENT-T8
+    kind: functional
+    subsystem: entities
+    title: "Corrective filing chains parent_doc_id; ordered by submit time"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B test list T8 (L62)"
+    types:
+      - src/caqrs/entities/types.py::Filing
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_corrective_filing_is_returned_in_submit_time_order]
+      - path: tests/test_entities_duckdb.py
+        names: [test_corrective_filing_is_returned_in_submit_time_order]
+    status: formalized
+    notes: ""
+
+  - id: ENT-T9
+    kind: functional
+    subsystem: entities
+    title: "subsidiaries_of(B, at=last_effective_day) returns active relation"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B test list T9 (L68)"
+    types:
+      - src/caqrs/entities/protocol.py::EntityStore.subsidiaries_of
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_subsidiaries_of_returns_relation_active_on_last_effective_day]
+      - path: tests/test_entities_duckdb.py
+        names: [test_subsidiaries_of_returns_relation_active_on_last_effective_day]
+    status: formalized
+    notes: ""
+
+  - id: ENT-T10
+    kind: functional
+    subsystem: entities
+    title: "subsidiaries_of(B, at=exclusive_end_date) excludes the relation"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B test list T10 (L69)"
+    types:
+      - src/caqrs/entities/types.py::Relation
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_subsidiaries_of_excludes_relation_on_exclusive_end_date]
+      - path: tests/test_entities_duckdb.py
+        names: [test_subsidiaries_of_excludes_relation_on_exclusive_end_date]
+    status: formalized
+    notes: ""
+
+  - id: ENT-T11
+    kind: functional
+    subsystem: entities
+    title: "Round-trip: DuckDB store reload from a fresh process returns identical graph"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B test list T11 (L75)"
+    types:
+      - src/caqrs/entities/duckdb.py::DuckDbEntityStore
+    tests:
+      - path: tests/test_entities_duckdb.py
+        names: [test_t11_round_trip_persists_graph_for_fresh_store]
+    status: formalized
+    notes: ""
+
+  - id: ENT-T12
+    kind: functional
+    subsystem: entities
+    title: "MarketPoint provenance preserves Source / fetched_at / payload_hash"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B test list T12 (L81)"
+    types:
+      - src/caqrs/entities/types.py::Provenance
+    tests:
+      - path: tests/test_entities_in_memory.py
+        names: [test_market_point_provenance_preserves_jquants_payload_hash]
+      - path: tests/test_entities_duckdb.py
+        names: [test_market_point_provenance_preserves_jquants_payload_hash]
+    status: formalized
+    notes: ""
+
+  # --- ENT property tests (P1..P5) ---
+
+  - id: ENT-P1
+    kind: functional
+    subsystem: entities
+    title: "MarketSeries.points are time-sorted (idempotent under sort)"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B property P1 (L89)"
+    types:
+      - src/caqrs/entities/types.py::MarketSeries
+    tests:
+      - path: tests/test_entities_properties.py
+        names: [test_market_series_points_are_time_sorted]
+    status: formalized
+    notes: "Hypothesis-driven."
+
+  - id: ENT-P2
+    kind: functional
+    subsystem: entities
+    title: "Lookup is deterministic across permutations of an Issuer's identifier set"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B property P2 (L90)"
+    types:
+      - src/caqrs/entities/protocol.py::EntityStore.lookup_issuer
+    tests:
+      - path: tests/test_entities_properties.py
+        names: [test_lookup_is_deterministic_for_any_issuer_identifier]
+    status: formalized
+    notes: "Hypothesis-driven."
+
+  - id: ENT-P3
+    kind: functional
+    subsystem: entities
+    title: "Filing round-trip: append + read preserves equality"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B property P3 (L91)"
+    types:
+      - src/caqrs/entities/types.py::Filing
+    tests:
+      - path: tests/test_entities_properties.py
+        names: [test_filing_written_then_read_back_is_equal]
+    status: formalized
+    notes: "Hypothesis-driven."
+
+  - id: ENT-P4
+    kind: functional
+    subsystem: entities
+    title: "Relation half-open interval: relations_at(t) ⇔ valid_from ≤ t < valid_to"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B property P4 (L92)"
+    types:
+      - src/caqrs/entities/types.py::Relation
+    tests:
+      - path: tests/test_entities_properties.py
+        names: [test_relation_half_open_interval, test_relations_for_returns_relation_iff_at_is_inside_half_open_interval]
+    status: formalized
+    notes: "Hypothesis-driven."
+
+  - id: ENT-P5
+    kind: functional
+    subsystem: entities
+    title: "merge_issuers unions disjoint identifier sets idempotently"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§B property P5 (L93)"
+    types:
+      - src/caqrs/entities/protocol.py::EntityStore.merge_issuers
+    tests:
+      - path: tests/test_entities_properties.py
+        names: [test_merge_issuers_unions_disjoint_identifiers_idempotently]
+    status: formalized
+    notes: "Hypothesis-driven."
+
+  - id: ENT-TYPES-1
+    kind: functional
+    subsystem: entities
+    title: "Issuer / Identifier / Provenance models are frozen + extra=forbid + strict"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§D rules 4-5 (L386-L405)"
+    types:
+      - src/caqrs/entities/types.py::Issuer
+      - src/caqrs/entities/types.py::Identifier
+      - src/caqrs/entities/types.py::Provenance
+    tests:
+      - path: tests/test_entities_types.py
+        names: [test_issuer_id_accepts_canonical_16_hex, test_issuer_id_rejects_malformed_values, test_issuer_rejects_lowercase_lei, test_issuer_rejects_malformed_jcn, test_pydantic_models_are_frozen, test_issuer_identifiers_are_canonicalized_by_kind_and_value, test_provenance_rejects_non_sha256_payload_hash, test_identifier_value_bounds]
+    status: formalized
+    notes: ""
+
+  - id: ENT-MIGRATION-1
+    kind: functional
+    subsystem: entities
+    title: "DuckDB schema init is idempotent; unsupported schema_version raises"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§E2 'idempotent init()' (L429)"
+    types:
+      - src/caqrs/entities/duckdb.py::DuckDbEntityStore
+    tests:
+      - path: tests/test_entities_duckdb_migrations.py
+        names: [test_init_is_idempotent, test_unsupported_schema_version_raises]
+    status: formalized
+    notes: ""
+
+  - id: ENT-VECTOR-1
+    kind: functional
+    subsystem: entities
+    title: "caqrs.entities.vector subpackage reservation (deferred to Phase E5)"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§D rule 3 (L396-L399); §E5 (L455-L457)"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E5; news/text embedding research axis."
+
+  - id: ENT-RECONCILIATION-1
+    kind: functional
+    subsystem: entities
+    title: "Reconciliation seed loaders for J-Quants / EDINET DB / GLEIF (Phase E3)"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§E3 (L433-L443)"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E3; not yet implemented. JCN ↔ EDINET-code conflicts noted in §G."
+
+  - id: ENT-CYCLE-INTEGRATION-1
+    kind: functional
+    subsystem: entities
+    title: "EntityResolver bundle for Observer (Phase E4: cycle runner integration)"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§E4 (L445-L453)"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Phase E4; CycleRunner does not yet take entity_store ctor arg."
+
+  # =====================================================================
+  # POLICY GATEWAY (P3): pure-function projection from StrategyDecision to
+  # FeasibleAction. Spec at ADR-0005 + the pure docstring of gateway.py.
+  # =====================================================================
+
+  - id: GW-A1
+    kind: functional
+    subsystem: policy_gateway
+    title: "apply_policy_gateway is a pure function (no I/O, no clock, no broker SDK)"
+    spec:
+      file: docs/decisions/0005-policy-gateway-as-pure-function.md
+      section: "Decision 1 (L25-L34); Drivers (L51-L69)"
+    types:
+      - src/caqrs/policy/gateway.py::apply_policy_gateway
+    tests:
+      - path: tests/test_policy_gateway_skeleton.py
+        names: [test_feasible_action_carries_decision_and_no_violations_when_clean, test_feasible_action_round_trips_through_json, test_notional_cap_below_decision_demotes_to_defer, test_notional_cap_at_or_above_decision_passes]
+    status: formalized
+    notes: ""
+
+  - id: GW-A2
+    kind: functional
+    subsystem: policy_gateway
+    title: "Demote-whole on any violation; never filter-partial"
+    spec:
+      file: docs/decisions/0005-policy-gateway-as-pure-function.md
+      section: "Decision 2 (L36-L40); Drivers (L70-L89)"
+    types:
+      - src/caqrs/policy/gateway.py::FeasibleAction
+      - src/caqrs/policy/gateway.py::apply_policy_gateway
+    tests:
+      - path: tests/test_policy_gateway_skeleton.py
+        names: [test_multiple_violations_are_all_reported, test_denied_ticker_demotes_to_defer]
+    status: formalized
+    notes: ""
+
+  - id: GW-A3
+    kind: functional
+    subsystem: policy_gateway
+    title: "Closed enum PolicyViolationKind catalogues all constraint classes"
+    spec:
+      file: docs/decisions/0005-policy-gateway-as-pure-function.md
+      section: "Decision 3 (L41-L47); Drivers (L91-L100)"
+    types:
+      - src/caqrs/policy/gateway.py::PolicyViolationKind
+      - src/caqrs/policy/gateway.py::PolicyViolation
+    tests:
+      - path: tests/test_policy_gateway_skeleton.py
+        names: [test_policy_violation_construction, test_policy_violation_is_frozen_extra_forbid]
+    status: formalized
+    notes: ""
+
+  - id: GW-A4
+    kind: functional
+    subsystem: policy_gateway
+    title: "Notional cap (P3.a): decision.notional_cap_usd > config.account_notional_cap_usd demotes"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "P3.a (L179)"
+    types:
+      - src/caqrs/policy/gateway.py::PolicyGatewayConfig
+    tests:
+      - path: tests/test_policy_gateway_skeleton.py
+        names: [test_notional_cap_below_decision_demotes_to_defer, test_notional_cap_at_or_above_decision_passes]
+    status: formalized
+    notes: ""
+
+  - id: GW-A5
+    kind: functional
+    subsystem: policy_gateway
+    title: "Allow / deny ticker lists; allow ∩ deny overlap is rejected at config construction"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "P3.a (L179)"
+    types:
+      - src/caqrs/policy/gateway.py::PolicyGatewayConfig
+    tests:
+      - path: tests/test_policy_gateway_skeleton.py
+        names: [test_policy_gateway_config_rejects_overlap_allow_deny, test_denied_ticker_demotes_to_defer, test_allow_list_excludes_unlisted_ticker, test_allow_list_with_all_tickers_passes]
+    status: formalized
+    notes: ""
+
+  - id: GW-A6
+    kind: functional
+    subsystem: policy_gateway
+    title: "Daily loss budget consumption (P3.b): demote when remaining ≤ 0"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "P3.b (L180)"
+    types:
+      - src/caqrs/policy/gateway.py::PolicyGatewayConfig
+      - src/caqrs/policy/gateway.py::PolicyViolationKind.LOSS_BUDGET_EXHAUSTED
+    tests:
+      - path: tests/test_policy_gateway_loss_budget.py
+        names: [test_zero_realized_loss_with_default_limit_passes, test_realized_loss_below_limit_passes, test_realized_loss_equal_to_limit_demotes, test_realized_loss_above_limit_demotes, test_violation_context_carries_remaining_budget, test_loss_budget_violation_aggregates_with_other_violations, test_loss_budget_does_not_apply_to_reject_or_defer, test_config_default_realized_loss_is_zero, test_config_rejects_negative_realized_loss, test_config_accepts_zero_realized_loss]
+    status: formalized
+    notes: ""
+
+  - id: GW-A7
+    kind: functional
+    subsystem: policy_gateway
+    title: "REJECT / DEFER decisions pass through with zero violations and empty targets"
+    spec:
+      file: src/caqrs/policy/gateway.py
+      section: "apply_policy_gateway docstring (L181-L187)"
+    types:
+      - src/caqrs/policy/gateway.py::apply_policy_gateway
+    tests:
+      - path: tests/test_policy_gateway_skeleton.py
+        names: [test_reject_decision_passes_through_unchanged, test_defer_decision_passes_through_unchanged]
+    status: formalized
+    notes: ""
+
+  - id: GW-A8
+    kind: functional
+    subsystem: policy_gateway
+    title: "FeasibleAction self-consistency (ADOPT iff non-empty targets and zero violations)"
+    spec:
+      file: src/caqrs/policy/gateway.py
+      section: "FeasibleAction._consistency validator (L89-L100)"
+    types:
+      - src/caqrs/policy/gateway.py::FeasibleAction
+    tests:
+      - path: tests/test_policy_gateway_skeleton.py
+        names: [test_feasible_action_carries_decision_and_no_violations_when_clean]
+    status: formalized
+    notes: ""
+
+  - id: GW-A9
+    kind: functional
+    subsystem: policy_gateway
+    title: "CycleRunner wiring: optional policy_gateway_config emits POLICY_GATEWAY_APPLIED event"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "P3.c (L181)"
+    types:
+      - src/caqrs/orchestrator/cycle_runner.py::CycleRunner
+      - src/caqrs/orchestrator/events.py::policy_gateway_applied_event
+    tests:
+      - path: tests/test_orchestrator_policy_gateway.py
+        names: [test_no_config_means_no_gateway_invocation, test_empty_config_passes_adopt_through_unchanged, test_violating_decision_demotes_to_defer_and_emits_event, test_reject_decision_passes_through_with_zero_violations, test_audit_fail_skips_gateway_too]
+    status: formalized
+    notes: ""
+
+  - id: GW-A10
+    kind: functional
+    subsystem: policy_gateway
+    title: "LossBudgetTracker: caller-side day-boundary projection (P3.d-3)"
+    spec:
+      file: docs/decisions/0005-policy-gateway-as-pure-function.md
+      section: "Day-boundary semantics (L127-L155)"
+    types:
+      - src/caqrs/policy/loss_budget_tracker.py
+    tests:
+      - path: tests/test_loss_budget_tracker.py
+        names: [test_realized_pnl_source_protocol_matches_paper_broker, test_today_realized_loss_raises_before_first_mark, test_zero_loss_when_pnl_unchanged_since_baseline, test_zero_loss_when_pnl_rises_since_baseline, test_positive_loss_magnitude_when_pnl_falls_since_baseline, test_works_against_already_negative_baseline, test_same_day_mark_is_idempotent, test_different_day_mark_rebases_baseline, test_rebase_resets_loss_even_after_intraday_drawdown, test_backwards_day_mark_raises, test_today_realized_loss_returns_decimal]
+    status: formalized
+    notes: ""
+
+  - id: GW-A11
+    kind: functional
+    subsystem: policy_gateway
+    title: "FastAPI endpoint /policy-gateway/apply exposes gateway projection over HTTP"
+    spec:
+      file: src/caqrs/api/app.py
+      section: "/policy-gateway/apply route (no ADR; TyDD via tests)"
+    types:
+      - src/caqrs/api/app.py
+    tests:
+      - path: tests/test_api_policy_gateway_endpoint.py
+        names: [test_apply_endpoint_passes_clean_decision_through, test_apply_endpoint_demotes_on_loss_budget_exhaustion, test_apply_endpoint_demotes_on_denied_ticker, test_apply_endpoint_validates_request_body, test_apply_endpoint_appears_in_openapi_paths]
+    status: partial
+    notes: "Behaviour locked in tests; the routing/openapi contract is not yet captured in a dedicated ADR or spec section."
+
+  # =====================================================================
+  # CYCLE RUNNER + ORCHESTRATOR PRIMITIVES
+  # =====================================================================
+
+  - id: CYCLE-A1
+    kind: functional
+    subsystem: orchestrator
+    title: "Termination semantics: happy path / audit fail / skeptic non-proceed / agent failure / budget breach"
+    spec:
+      file: src/caqrs/orchestrator/cycle_runner.py
+      section: "Termination semantics docstring (L14-L36)"
+    types:
+      - src/caqrs/orchestrator/cycle_runner.py::CycleRunner
+      - src/caqrs/orchestrator/cycle_runner.py::CycleResult
+    tests:
+      - path: tests/test_orchestrator_cycle_runner.py
+        names: [test_runner_completes_full_pipeline, test_runner_short_circuits_on_skeptic_kill, test_runner_skeptic_kill_emits_cycle_completed_not_aborted, test_runner_skeptic_kill_does_not_invoke_research_or_auditor, test_runner_aborts_on_observer_failure, test_audit_fail_skips_decider, test_decider_decision_action_can_be_reject]
+    status: formalized
+    notes: ""
+
+  - id: CYCLE-A2
+    kind: functional
+    subsystem: orchestrator
+    title: "State machine whitelist: idle → observing → … → deciding → idle (with skeptic / audit / error branches)"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Orchestrator state machine (L47-L66)"
+    types:
+      - src/caqrs/orchestrator/state_machine.py::OrchestratorStateMachine
+      - src/caqrs/orchestrator/state.py::OrchestratorState
+    tests:
+      - path: tests/test_orchestrator_state_machine.py
+        names: [test_initial_state_is_idle, test_initial_state_can_be_overridden, test_valid_transition_returns_true_and_advances_state, test_invalid_transition_returns_false_and_keeps_state, test_can_transition_to_reflects_validity, test_full_happy_path_pipeline, test_skeptic_kills_hypothesis_returns_to_idle, test_any_state_can_transition_to_error, test_error_transitions_back_to_idle, test_error_cannot_jump_to_arbitrary_state, test_listener_fires_on_successful_transition, test_listener_does_not_fire_on_failed_transition, test_multiple_listeners_each_receive_event, test_state_transition_record_is_frozen]
+    status: formalized
+    notes: ""
+
+  - id: CYCLE-A3
+    kind: functional
+    subsystem: orchestrator
+    title: "BudgetGuard: token + wallclock cap; first breach emits BUDGET_EXCEEDED; subsequent breaches silent"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Cycle runtime: events, budget, persistence (L100-L120)"
+    types:
+      - src/caqrs/orchestrator/budget.py::BudgetGuard
+      - src/caqrs/orchestrator/budget.py::CycleBudget
+      - src/caqrs/orchestrator/budget.py::BudgetStatus
+    tests:
+      - path: tests/test_orchestrator_budget.py
+        names: [test_cycle_budget_requires_positive_token_cap, test_cycle_budget_requires_positive_wallclock_cap, test_cycle_budget_is_frozen, test_guard_starts_with_zero_consumption, test_guard_initial_check_is_ok, test_consume_accumulates_token_in_and_out, test_consume_returns_status, test_consume_rejects_negative, test_status_flips_to_token_exceeded_when_over_cap, test_status_at_exact_cap_is_ok, test_status_flips_to_wallclock_exceeded, test_token_exceeded_takes_priority_over_wallclock_in_status_kind, test_first_token_breach_emits_budget_exceeded_event, test_first_wallclock_breach_emits_budget_exceeded_event, test_subsequent_breaches_do_not_re_emit, test_no_event_log_means_no_emission_but_status_still_correct, test_status_carries_full_snapshot, test_status_is_frozen]
+    status: formalized
+    notes: ""
+
+  - id: CYCLE-A4
+    kind: functional
+    subsystem: orchestrator
+    title: "EventLog: append-only, listener fan-out, JSONL persist, filter by kind/cycle"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Cycle runtime: events, budget, persistence (L100-L120)"
+    types:
+      - src/caqrs/orchestrator/event_log.py::EventLog
+      - src/caqrs/orchestrator/events.py::CycleEvent
+      - src/caqrs/orchestrator/events.py::CycleEventKind
+    tests:
+      - path: tests/test_orchestrator_event_log.py
+        names: [test_event_log_starts_empty, test_event_log_append_records_in_order, test_event_log_extend_appends_in_order, test_event_log_filter_by_kind, test_event_log_filter_by_cycle, test_listener_fires_on_append, test_listener_fires_for_each_event_in_extend, test_multiple_listeners_each_receive_event, test_event_log_persists_to_jsonl, test_load_jsonl_round_trips, test_load_jsonl_returns_empty_when_file_missing, test_load_jsonl_skips_blank_lines, test_load_jsonl_raises_on_corruption]
+    status: formalized
+    notes: ""
+
+  - id: CYCLE-A5
+    kind: functional
+    subsystem: orchestrator
+    title: "CycleStore: per-cycle persistence + rolling index.jsonl + prune_older_than"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Cycle runtime / CycleStore (L107-L114)"
+    types:
+      - src/caqrs/memory/cycle_store.py
+      - src/caqrs/orchestrator/cycle_runner.py::CycleStoreProtocol
+    tests:
+      - path: tests/test_memory_cycle_store.py
+        names: [test_save_creates_per_cycle_directory, test_save_then_load_round_trips_result, test_load_raises_when_cycle_missing, test_save_appends_to_rolling_index, test_index_entry_carries_summary_fields, test_index_entry_for_aborted_cycle, test_index_entry_is_frozen, test_list_cycle_ids_empty_when_root_missing, test_list_cycle_ids_returns_sorted, test_index_entries_empty_when_no_saves, test_save_overwrites_existing_cycle_files, test_prune_drops_cycles_older_than_cutoff, test_prune_returns_empty_when_no_cycles_match, test_prune_removes_per_cycle_files, test_prune_rewrites_index_to_drop_pruned_entries, test_prune_is_idempotent, test_prune_on_empty_store_returns_empty, test_prune_uses_ended_at_not_started_at, test_prune_handles_resaved_cycle_with_multiple_index_rows]
+    status: formalized
+    notes: ""
+
+  - id: CYCLE-A6
+    kind: functional
+    subsystem: orchestrator
+    title: "CycleQueue: serial dispatcher, FIFO, reentrancy guard"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Cycle runtime / CycleQueue (L115-L116)"
+    types:
+      - src/caqrs/orchestrator/cycle_queue.py
+    tests:
+      - path: tests/test_orchestrator_cycle_queue.py
+        names: [test_empty_queue_has_zero_pending, test_enqueue_increments_pending, test_run_one_returns_none_when_empty, test_run_one_dequeues_and_runs, test_drain_runs_all_in_fifo_order, test_drain_returns_empty_tuple_when_empty, test_concurrent_drain_runs_serially, test_run_one_respects_running_flag, test_heartbeat_drives_queue_at_interval_boundaries, test_heartbeat_idle_tick_leaves_queue_empty]
+    status: formalized
+    notes: ""
+
+  - id: CYCLE-A7
+    kind: functional
+    subsystem: orchestrator
+    title: "Heartbeat: interval-based fire tracker, is_due / fire / last_fired_at"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Cycle runtime / Heartbeat (L117-L120)"
+    types:
+      - src/caqrs/orchestrator/heartbeat.py
+    tests:
+      - path: tests/test_orchestrator_heartbeat.py
+        names: [test_heartbeat_is_due_before_first_fire, test_heartbeat_last_fired_at_is_none_initially, test_fire_sets_last_fired_at_to_current_clock, test_is_due_false_immediately_after_fire, test_is_due_true_when_interval_exactly_elapsed, test_is_due_false_when_interval_not_yet_elapsed, test_is_due_true_well_past_interval, test_consecutive_fires_advance_last_fired_at, test_heartbeat_rejects_zero_interval, test_heartbeat_rejects_negative_interval, test_default_clock_is_utc_now]
+    status: formalized
+    notes: ""
+
+  - id: CYCLE-A8
+    kind: functional
+    subsystem: orchestrator
+    title: "Tool-call loop detector: identical-loop / similar-failing / same-tool / text repetition / hard-abort thresholds"
+    spec:
+      file: src/caqrs/orchestrator/loop_detector.py
+      section: "Module-level docstring + thresholds"
+    types:
+      - src/caqrs/orchestrator/loop_detector.py
+    tests:
+      - path: tests/test_orchestrator_loop_detector.py
+        names: [test_total_calls_increments_on_record, test_record_resets_no_action_counter, test_no_action_caps_at_threshold, test_absolute_limit_total_calls, test_absolute_limit_failed_calls, test_identical_loop_triggers_at_three, test_identical_loop_does_not_trigger_when_params_differ, test_identical_loop_recovers_after_different_call, test_similar_failing_triggers_at_four, test_similar_failing_requires_failure_on_last, test_similar_failing_below_threshold_returns_none, test_same_tool_normal_triggers_at_three, test_same_tool_high_tolerance_triggers_at_five, test_same_tool_threshold_drops_when_three_failures, test_text_repetition_triggers_on_three_similar_steps, test_text_repetition_below_threshold_returns_none, test_text_repetition_ignores_dissimilar_texts, test_record_step_text_ignores_short_or_empty, test_reset_clears_all_state, test_hard_aborted_remains_set_until_reset]
+    status: partial
+    notes: "Algorithmic spec lives only in the module docstring; should be promoted to a survey doc + ADR (Mercury parity)."
+
+  - id: CYCLE-A9
+    kind: functional
+    subsystem: orchestrator
+    title: "Preflight scanner: tool-repetition + text-repetition warnings before agent invocation"
+    spec:
+      file: src/caqrs/orchestrator/preflight.py
+      section: "Module-level docstring"
+    types:
+      - src/caqrs/orchestrator/preflight.py
+    tests:
+      - path: tests/test_orchestrator_preflight.py
+        names: [test_scan_tool_repetition_triggers_at_threshold, test_scan_tool_repetition_below_threshold_returns_none, test_scan_tool_repetition_streak_must_be_consecutive, test_scan_tool_repetition_custom_threshold, test_scan_tool_repetition_rejects_non_positive_threshold, test_scan_tool_repetition_handles_empty_history, test_scan_text_repetition_triggers_on_three_similar_texts, test_scan_text_repetition_below_threshold_returns_none, test_scan_text_repetition_ignores_dissimilar_texts, test_scan_text_repetition_filters_short_texts, test_scan_text_repetition_with_mixed_short_and_long, test_scan_text_repetition_streak_must_be_recent, test_scan_text_repetition_rejects_invalid_thresholds, test_compose_returns_empty_when_no_warnings, test_compose_concatenates_with_double_newline, test_warning_to_system_message_prefixes]
+    status: partial
+    notes: "Same situation as CYCLE-A8: behaviour fully tested but contract lives in module docstring rather than docs/."
+
+  - id: CYCLE-A10
+    kind: functional
+    subsystem: orchestrator
+    title: "RunMetadata lineage: run_id / parent_id / agent_name / model_id / cost / latency / tokens"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Artifact lineage (L79-L89)"
+    types:
+      - src/caqrs/schemas/common.py::RunMetadata
+    tests:
+      - path: tests/test_artifact_roundtrip.py
+        names: [test_run_metadata_roundtrip, test_run_metadata_rejects_naive_datetime, test_run_metadata_rejects_bad_run_id]
+    status: formalized
+    notes: ""
+
+  - id: CYCLE-A11
+    kind: functional
+    subsystem: orchestrator
+    title: "Walk-forward as schema-level invariant: train_start < train_end ≤ test_start < test_end + non-overlapping test windows"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Walk-forward as schema-level invariant (L91-L98)"
+    types:
+      - src/caqrs/schemas/research_plan.py::WalkForwardWindow
+      - src/caqrs/schemas/research_plan.py::ResearchPlan
+    tests:
+      - path: tests/test_artifact_roundtrip.py
+        names: [test_walk_forward_rejects_train_test_overlap, test_research_plan_roundtrip_minimal, test_research_plan_rejects_overlapping_test_windows]
+    status: formalized
+    notes: ""
+
+  - id: CYCLE-A12
+    kind: functional
+    subsystem: orchestrator
+    title: "Auto-persist: CycleRunner saves CycleResult + filtered events when CycleStore is wired"
+    spec:
+      file: src/caqrs/orchestrator/cycle_runner.py
+      section: "_persist_if_configured (L539-L545)"
+    types:
+      - src/caqrs/orchestrator/cycle_runner.py::CycleStoreProtocol
+    tests:
+      - path: tests/test_orchestrator_cycle_runner.py
+        names: [test_auto_persist_saves_cycle_when_store_provided, test_auto_persist_only_includes_events_for_this_cycle, test_auto_persist_records_aborted_cycle, test_no_persist_when_store_is_none, test_real_cycle_store_round_trips_via_auto_persist]
+    status: formalized
+    notes: ""
+
+  - id: CYCLE-A13
+    kind: functional
+    subsystem: orchestrator
+    title: "CYCLE_STARTED event emitted at run start with cycle_id"
+    spec:
+      file: src/caqrs/orchestrator/events.py
+      section: "CycleEventKind.CYCLE_STARTED"
+    types:
+      - src/caqrs/orchestrator/events.py::CycleEventKind
+      - src/caqrs/orchestrator/events.py::cycle_started_event
+    tests:
+      - path: tests/test_orchestrator_cycle_runner.py
+        names: [test_runner_emits_cycle_started_and_completed]
+    status: formalized
+    notes: ""
+
+  - id: CYCLE-A14
+    kind: functional
+    subsystem: orchestrator
+    title: "CYCLE_ABORTED emitted on agent failure / budget breach"
+    spec:
+      file: src/caqrs/orchestrator/events.py
+      section: "CycleEventKind.CYCLE_ABORTED"
+    types:
+      - src/caqrs/orchestrator/events.py::CycleEventKind
+    tests:
+      - path: tests/test_orchestrator_cycle_runner.py
+        names: [test_runner_failure_emits_agent_failed_and_cycle_aborted]
+    status: partial
+    notes: "agent-failure path asserted directly; budget-breach path asserted indirectly via budget-enforcement tests below"
+
+  - id: CYCLE-A15
+    kind: functional
+    subsystem: orchestrator
+    title: "LOOP_DETECTED event raised by ToolCallLoopDetector"
+    spec:
+      file: src/caqrs/orchestrator/events.py
+      section: "CycleEventKind.LOOP_DETECTED + loop_detected_event"
+    types:
+      - src/caqrs/orchestrator/events.py::CycleEventKind
+      - src/caqrs/orchestrator/events.py::loop_detected_event
+    tests:
+      - path: tests/test_orchestrator_event_log.py
+        names: [test_loop_detected_event]
+    status: partial
+    notes: "emit-shape asserted directly; runtime emission from ToolCallLoopDetector asserted indirectly via cycle-runner tests; no end-to-end assertion of the kind"
+
+  # =====================================================================
+  # PAPER BROKER (P3.d): long-only rebalance + all-or-nothing semantics
+  # =====================================================================
+
+  - id: BROKER-A1
+    kind: functional
+    subsystem: paper_broker
+    title: "ADOPT triggers full rebalance to target weights against current equity"
+    spec:
+      file: src/caqrs/execution/paper_broker.py
+      section: "Module docstring (L7-L26)"
+    types:
+      - src/caqrs/execution/paper_broker.py::PaperBroker
+      - src/caqrs/execution/execution_report.py::ExecutionReport
+    tests:
+      - path: tests/test_paper_broker_rebalance.py
+        names: [test_initial_state_zero_realized_pnl_no_positions, test_first_adopt_opens_positions_at_avg_cost_equal_to_fill, test_buy_more_at_lower_price_lowers_weighted_avg_cost, test_sell_down_at_profit_accrues_positive_realized_pnl, test_sell_down_at_loss_accrues_negative_realized_pnl, test_dropped_ticker_is_fully_closed, test_rebalance_emits_sells_then_buys]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-A2
+    kind: functional
+    subsystem: paper_broker
+    title: "All-or-nothing semantics: any missing price ⇒ whole report REJECTED, no state change"
+    spec:
+      file: src/caqrs/execution/paper_broker.py
+      section: "Module docstring (L17-L21)"
+    types:
+      - src/caqrs/execution/paper_broker.py::PaperBroker
+    tests:
+      - path: tests/test_paper_broker_skeleton.py
+        names: [test_missing_price_for_any_target_rejects_whole_action, test_rejected_report_carries_reason]
+      - path: tests/test_paper_broker_rebalance.py
+        names: [test_missing_price_for_existing_position_rejects_whole_action]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-A3
+    kind: functional
+    subsystem: paper_broker
+    title: "Realized PnL accumulates on SELLs ((sale - avg_cost) * qty); BUYs update weighted avg_cost"
+    spec:
+      file: src/caqrs/execution/paper_broker.py
+      section: "Module docstring + Position class (L46-L57)"
+    types:
+      - src/caqrs/execution/paper_broker.py::Position
+    tests:
+      - path: tests/test_paper_broker_rebalance.py
+        names: [test_position_is_frozen_extra_forbid, test_position_rejects_negative_qty_and_negative_cost, test_buy_more_at_lower_price_lowers_weighted_avg_cost, test_sell_down_at_profit_accrues_positive_realized_pnl, test_sell_down_at_loss_accrues_negative_realized_pnl]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-A4
+    kind: functional
+    subsystem: paper_broker
+    title: "DEFER / REJECT actions yield ExecutionStatus.SKIPPED with no broker work"
+    spec:
+      file: src/caqrs/execution/paper_broker.py
+      section: "Module docstring (L15)"
+    types:
+      - src/caqrs/execution/execution_report.py::ExecutionStatus
+    tests:
+      - path: tests/test_paper_broker_skeleton.py
+        names: [test_defer_action_emits_skipped_no_state_change, test_skipped_report_carries_decision_run_id_and_reason]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-A5
+    kind: functional
+    subsystem: paper_broker
+    title: "Initial capital must be positive"
+    spec:
+      file: src/caqrs/execution/paper_broker.py
+      section: "PaperBroker.__init__ guard (L67-L70)"
+    types:
+      - src/caqrs/execution/paper_broker.py::PaperBroker
+    tests:
+      - path: tests/test_paper_broker_skeleton.py
+        names: [test_initial_capital_must_be_positive]
+    status: formalized
+    notes: ""
+
+  # --- BROKER-T1..T15: PR #71 wiring tests (PaperBroker into CycleRunner). ---
+
+  - id: BROKER-T1
+    kind: functional
+    subsystem: paper_broker
+    title: "Default no-broker preserves no execution report"
+    spec:
+      file: tests/test_orchestrator_paper_broker.py
+      section: "L378-L385 (PR #71 / commit 9a33815)"
+    types:
+      - src/caqrs/orchestrator/cycle_runner.py::CycleRunner
+    tests:
+      - path: tests/test_orchestrator_paper_broker.py
+        names: [test_default_no_broker_preserves_no_execution_report]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-T2
+    kind: functional
+    subsystem: paper_broker
+    title: "ADOPT decision fills and emits BROKER_EXECUTED event with status=filled"
+    spec:
+      file: tests/test_orchestrator_paper_broker.py
+      section: "L388-L408 (PR #71)"
+    types:
+      - src/caqrs/orchestrator/events.py::broker_executed_event
+    tests:
+      - path: tests/test_orchestrator_paper_broker.py
+        names: [test_adopt_fills_and_emits_filled_event]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-T3
+    kind: functional
+    subsystem: paper_broker
+    title: "Gateway demote (DEFER) is skipped by broker (status=skipped)"
+    spec:
+      file: tests/test_orchestrator_paper_broker.py
+      section: "L412-L430 (PR #71)"
+    types:
+      - src/caqrs/policy/gateway.py::FeasibleAction
+    tests:
+      - path: tests/test_orchestrator_paper_broker.py
+        names: [test_defer_from_gateway_is_skipped_by_broker]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-T4
+    kind: functional
+    subsystem: paper_broker
+    title: "REJECT decision is skipped by broker"
+    spec:
+      file: tests/test_orchestrator_paper_broker.py
+      section: "L434-L454 (PR #71)"
+    types:
+      - src/caqrs/execution/paper_broker.py::PaperBroker
+    tests:
+      - path: tests/test_orchestrator_paper_broker.py
+        names: [test_reject_decision_is_skipped_by_broker]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-T5
+    kind: functional
+    subsystem: paper_broker
+    title: "ADOPT with missing price is rejected by broker (status=rejected)"
+    spec:
+      file: tests/test_orchestrator_paper_broker.py
+      section: "L458-L482 (PR #71)"
+    types:
+      - src/caqrs/execution/execution_report.py::ExecutionStatus.REJECTED
+    tests:
+      - path: tests/test_orchestrator_paper_broker.py
+        names: [test_adopt_with_missing_price_is_rejected_by_broker]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-T6
+    kind: functional
+    subsystem: paper_broker
+    title: "Broker without gateway is silently skipped"
+    spec:
+      file: tests/test_orchestrator_paper_broker.py
+      section: "L485-L499 (PR #71)"
+    types:
+      - src/caqrs/orchestrator/cycle_runner.py::CycleRunner
+    tests:
+      - path: tests/test_orchestrator_paper_broker.py
+        names: [test_broker_without_gateway_is_silently_skipped]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-T7
+    kind: functional
+    subsystem: paper_broker
+    title: "Broker without price provider is silently skipped"
+    spec:
+      file: tests/test_orchestrator_paper_broker.py
+      section: "L502-L517 (PR #71)"
+    types:
+      - src/caqrs/orchestrator/cycle_runner.py::PriceProvider
+    tests:
+      - path: tests/test_orchestrator_paper_broker.py
+        names: [test_broker_without_price_provider_is_silently_skipped]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-T8
+    kind: functional
+    subsystem: paper_broker
+    title: "Price provider without broker is silently skipped"
+    spec:
+      file: tests/test_orchestrator_paper_broker.py
+      section: "L520-L534 (PR #71)"
+    types:
+      - src/caqrs/orchestrator/cycle_runner.py::CycleRunner
+    tests:
+      - path: tests/test_orchestrator_paper_broker.py
+        names: [test_price_provider_without_broker_is_silently_skipped]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-T9
+    kind: functional
+    subsystem: paper_broker
+    title: "Audit FAIL skips the broker (no decision, no execution_report)"
+    spec:
+      file: tests/test_orchestrator_paper_broker.py
+      section: "L538-L553 (PR #71)"
+    types:
+      - src/caqrs/orchestrator/cycle_runner.py::CycleRunner
+    tests:
+      - path: tests/test_orchestrator_paper_broker.py
+        names: [test_audit_fail_skips_broker]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-T10
+    kind: functional
+    subsystem: paper_broker
+    title: "Skeptic non-PROCEED (KILL) skips broker; terminal_state=SCRUTINIZING"
+    spec:
+      file: tests/test_orchestrator_paper_broker.py
+      section: "L557-L572 (PR #71)"
+    types:
+      - src/caqrs/schemas/skeptic.py::SkepticVerdict
+    tests:
+      - path: tests/test_orchestrator_paper_broker.py
+        names: [test_skeptic_non_proceed_skips_broker]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-T11
+    kind: functional
+    subsystem: paper_broker
+    title: "Decider failure skips broker; terminal_state=ERROR"
+    spec:
+      file: tests/test_orchestrator_paper_broker.py
+      section: "L576-L591 (PR #71)"
+    types:
+      - src/caqrs/orchestrator/cycle_runner.py::CycleRunner
+    tests:
+      - path: tests/test_orchestrator_paper_broker.py
+        names: [test_decider_failure_skips_broker]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-T12
+    kind: functional
+    subsystem: paper_broker
+    title: "Event ordering: POLICY_GATEWAY_APPLIED < BROKER_EXECUTED < CYCLE_COMPLETED"
+    spec:
+      file: tests/test_orchestrator_paper_broker.py
+      section: "L595-L609 (PR #71)"
+    types:
+      - src/caqrs/orchestrator/events.py::CycleEventKind
+    tests:
+      - path: tests/test_orchestrator_paper_broker.py
+        names: [test_broker_event_is_ordered_between_gateway_and_completion]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-T13
+    kind: functional
+    subsystem: paper_broker
+    title: "Price provider exception aborts cycle without emitting BROKER_EXECUTED"
+    spec:
+      file: tests/test_orchestrator_paper_broker.py
+      section: "L613-L632 (PR #71)"
+    types:
+      - src/caqrs/orchestrator/cycle_runner.py::CycleRunner
+    tests:
+      - path: tests/test_orchestrator_paper_broker.py
+        names: [test_price_provider_error_aborts_without_broker_event]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-T14
+    kind: functional
+    subsystem: paper_broker
+    title: "ExecutionReport preserves source_decision_run_id"
+    spec:
+      file: tests/test_orchestrator_paper_broker.py
+      section: "L636-L648 (PR #71)"
+    types:
+      - src/caqrs/execution/execution_report.py::ExecutionReport
+    tests:
+      - path: tests/test_orchestrator_paper_broker.py
+        names: [test_execution_report_preserves_source_decision_run_id]
+    status: formalized
+    notes: ""
+
+  - id: BROKER-T15
+    kind: functional
+    subsystem: paper_broker
+    title: "CycleStore receives BROKER_EXECUTED event in saved events stream"
+    spec:
+      file: tests/test_orchestrator_paper_broker.py
+      section: "L652-L668 (PR #71)"
+    types:
+      - src/caqrs/orchestrator/cycle_runner.py::CycleStoreProtocol
+    tests:
+      - path: tests/test_orchestrator_paper_broker.py
+        names: [test_cycle_store_receives_broker_event]
+    status: formalized
+    notes: ""
+
+  # =====================================================================
+  # DATA SOURCE ADAPTERS (each subsystem has rate-limit cap, retry policy,
+  # schema validation, and optional cache.) No dedicated docs; spec lives
+  # in module docstrings + tests. Most are status: partial (no ADR).
+  # =====================================================================
+
+  # --- J-Quants ---
+
+  - id: DATA-JQ-A1
+    kind: functional
+    subsystem: data_jquants
+    title: "Free-tier rate limit: 5 req/min ⇒ min_interval=12s"
+    spec:
+      file: src/caqrs/data/jquants/client.py
+      section: "_FREE_TIER_MIN_INTERVAL_SECONDS (L33)"
+    types:
+      - src/caqrs/data/jquants/client.py::JQuantsClient
+      - src/caqrs/data/_common/rate_limit.py::AsyncRateLimiter
+    tests:
+      - path: tests/test_jquants_rate_limit.py
+        names: [test_default_rate_limiter_min_interval_is_free_tier_pacing, test_caller_can_inject_custom_limiter, test_min_interval_paces_consecutive_calls]
+    status: partial
+    notes: "Free-tier number is captured in the module docstring; not in an ADR."
+
+  - id: DATA-JQ-A2
+    kind: functional
+    subsystem: data_jquants
+    title: "Linear backoff schedule (30/60/90s) on 429; 3 attempts max"
+    spec:
+      file: src/caqrs/data/jquants/client.py
+      section: "_DEFAULT_RETRY_SCHEDULE / _MAX_429_ATTEMPTS (L35-L40)"
+    types:
+      - src/caqrs/data/jquants/client.py::JQuantsClient
+    tests:
+      - path: tests/test_jquants_rate_limit.py
+        names: [test_default_retry_schedule_is_30_60_90, test_recovers_from_single_429, test_exhausts_retries_after_three_consecutive_429s, test_success_after_429_resets_streak_counter]
+    status: partial
+    notes: "Linear-backoff justification cited as Zenn ino_h article."
+
+  - id: DATA-JQ-A3
+    kind: functional
+    subsystem: data_jquants
+    title: "Pydantic schemas for ListedStock + DailyBar parse documented column aliases"
+    spec:
+      file: src/caqrs/data/jquants/schemas.py
+      section: "Module"
+    types:
+      - src/caqrs/data/jquants/schemas.py::JQuantsListedStock
+      - src/caqrs/data/jquants/schemas.py::JQuantsDailyBar
+    tests:
+      - path: tests/test_jquants_schemas.py
+        names: [test_listed_stock_parses_documented_column_aliases, test_listed_stock_tolerates_optional_field_absence, test_listed_stock_ignores_unknown_columns, test_daily_bar_parses_full_field_set, test_daily_bar_handles_missing_session_data, test_daily_bar_rejects_invalid_date, test_daily_bar_is_frozen]
+    status: formalized
+    notes: ""
+
+  - id: DATA-JQ-A4
+    kind: functional
+    subsystem: data_jquants
+    title: "list_master + daily_bars HTTP client (auth header, pagination, error mapping)"
+    spec:
+      file: src/caqrs/data/jquants/client.py
+      section: "Module docstring + endpoint methods"
+    types:
+      - src/caqrs/data/jquants/client.py::JQuantsClient
+    tests:
+      - path: tests/test_jquants_client.py
+        names: [test_request_carries_api_key_header, test_401_raises_with_status_code, test_429_rate_limit_raises_with_status_code, test_list_master_parses_typed_records, test_list_master_passes_code_and_date_query_params, test_pagination_follows_pagination_key, test_pagination_preserves_other_query_params_across_pages, test_daily_bars_parses_typed_records, test_daily_bars_date_range_uses_from_to_params, test_daily_bars_as_of_takes_precedence_over_range, test_constructor_rejects_empty_api_key, test_network_error_wrapped_as_jquants_error]
+    status: partial
+    notes: "Per-method semantics documented in tests; module docstring captures defaults."
+
+  - id: DATA-JQ-A5
+    kind: functional
+    subsystem: data_jquants
+    title: "Observer-facing snapshot helper builds last-close + returns + volatility"
+    spec:
+      file: src/caqrs/data/jquants/observer_signals.py
+      section: "Module docstring"
+    types:
+      - src/caqrs/data/jquants/observer_signals.py
+    tests:
+      - path: tests/test_jquants_observer_signals.py
+        names: [test_snapshot_populates_last_close_and_returns, test_snapshot_volatility_zero_for_constant_returns, test_snapshot_volatility_nonzero_for_alternating_returns, test_snapshot_short_history_degrades_to_none, test_snapshot_no_bars_raises, test_snapshot_uses_adjusted_close_when_present, test_snapshot_falls_back_to_raw_close_when_adjusted_missing, test_snapshot_passes_code_and_window_to_jquants, test_consecutive_dates_helper, test_snapshot_without_as_of_omits_date_params]
+    status: partial
+    notes: ""
+
+  # --- yFinance ---
+
+  - id: DATA-YF-A1
+    kind: functional
+    subsystem: data_yfinance
+    title: "auto_adjust=True + per-process tz cache + throttle pacing"
+    spec:
+      file: src/caqrs/data/yfinance/client.py
+      section: "Module docstring (L1-L20)"
+    types:
+      - src/caqrs/data/yfinance/client.py
+    tests:
+      - path: tests/test_yfinance_client.py
+        names: [test_daily_bars_returns_typed_records, test_daily_bars_passes_auto_adjust_true, test_client_isolates_tz_cache_per_process, test_aclose_cleans_up_tz_cache]
+    status: partial
+    notes: ""
+
+  - id: DATA-YF-A2
+    kind: functional
+    subsystem: data_yfinance
+    title: "Quota-exhausted detection: 3 consecutive empty responses ⇒ trip"
+    spec:
+      file: src/caqrs/data/yfinance/client.py
+      section: "Module docstring quota heuristic (L9-L11)"
+    types:
+      - src/caqrs/data/yfinance/client.py
+    tests:
+      - path: tests/test_yfinance_client.py
+        names: [test_daily_bars_distinguishes_no_data_from_rate_limit, test_three_consecutive_empties_trip_quota_exhausted, test_non_empty_response_resets_consecutive_empty_counter]
+    status: partial
+    notes: "Heuristic taken from rakuscan article; no ADR."
+
+  - id: DATA-YF-A3
+    kind: functional
+    subsystem: data_yfinance
+    title: "Retry with linear backoff; batch fetch + cache integration"
+    spec:
+      file: src/caqrs/data/yfinance/client.py
+      section: "Module docstring (L13-L18)"
+    types:
+      - src/caqrs/data/yfinance/client.py
+    tests:
+      - path: tests/test_yfinance_retry_batch.py
+        names: [test_retry_recovers_after_quota_event, test_retry_gives_up_after_max_attempts, test_batch_fetch_returns_dict_keyed_by_symbol, test_batch_fetch_propagates_quota_after_partial_collection, test_batch_fetch_uses_cache_on_hit, test_daily_bars_writes_to_cache_on_fresh_fetch]
+    status: partial
+    notes: ""
+
+  - id: DATA-YF-A4
+    kind: functional
+    subsystem: data_yfinance
+    title: "TTL SQLite cache: 1 day prices / 30 days financials"
+    spec:
+      file: src/caqrs/data/yfinance/cache.py
+      section: "Module docstring + DEFAULT_*_TTL_SECONDS (L1-L34)"
+    types:
+      - src/caqrs/data/yfinance/cache.py
+    tests:
+      - path: tests/test_yfinance_cache.py
+        names: [test_cache_creates_db_file_lazily, test_cache_round_trips_bars, test_cache_miss_returns_none, test_different_date_range_misses_even_for_same_symbol, test_expired_entry_returns_none, test_cache_persists_across_instances, test_default_price_ttl_is_one_day, test_default_financials_ttl_is_30_days, test_clear_removes_all_entries]
+    status: partial
+    notes: ""
+
+  - id: DATA-YF-A5
+    kind: functional
+    subsystem: data_yfinance
+    title: "Schema parses OHLCV + adjusted_close; rejects negative prices, high<low"
+    spec:
+      file: src/caqrs/data/yfinance/schemas.py
+      section: "Module"
+    types:
+      - src/caqrs/data/yfinance/schemas.py::YFinancePrice
+      - src/caqrs/data/yfinance/schemas.py::YFinanceFinancialPeriod
+    tests:
+      - path: tests/test_yfinance_schemas.py
+        names: [TestYFinancePrice, TestYFinanceFinancialPeriod]
+    status: formalized
+    notes: "Tests live in TestYFinancePrice / TestYFinanceFinancialPeriod test classes (not collected by the leading-def grep used in this audit; behaviour is fully tested per pytest collection)."
+
+  - id: DATA-YF-A6
+    kind: functional
+    subsystem: data_yfinance
+    title: "Observer snapshot helper for yfinance source"
+    spec:
+      file: src/caqrs/data/yfinance/observer_signals.py
+      section: "Module"
+    types:
+      - src/caqrs/data/yfinance/observer_signals.py
+    tests:
+      - path: tests/test_yfinance_observer_signals.py
+        names: [test_snapshot_carries_ticker_and_last_close, test_returns_none_for_short_history_metrics, test_computes_21day_return_when_history_sufficient]
+    status: partial
+    notes: ""
+
+  # --- Polymarket (CLOB + Gamma + Archive) ---
+
+  - id: DATA-PM-A1
+    kind: functional
+    subsystem: data_polymarket
+    title: "CLOB: midpoint / price / orderbook / price-history endpoints (no auth, ~1.5k req/10s)"
+    spec:
+      file: src/caqrs/data/polymarket/clob_client.py
+      section: "Module docstring (L1-L31)"
+    types:
+      - src/caqrs/data/polymarket/clob_client.py::PolymarketClobClient
+    tests:
+      - path: tests/test_polymarket_clob.py
+        names: [test_get_midpoint_returns_decimal_from_string_response, test_get_midpoint_accepts_float_response, test_get_midpoint_accepts_short_mid_key, test_get_midpoint_passes_token_id_query_param, test_get_price_returns_decimal, test_get_price_passes_side_query_param, test_get_orderbook_parses_full_snapshot, test_get_orderbook_parses_millisecond_timestamp, test_orderbook_derived_properties, test_orderbook_derived_properties_empty_book, test_get_price_history_parses_history_array, test_price_history_uses_market_query_param_not_token_id, test_price_history_passes_optional_params, test_non_200_status_raises_with_status_code, test_network_error_is_wrapped, test_invalid_decimal_in_response_raises, test_missing_field_raises, test_external_http_client_is_not_closed, test_used_without_context_manager_creates_one_shot_client]
+    status: partial
+    notes: ""
+
+  - id: DATA-PM-A2
+    kind: functional
+    subsystem: data_polymarket
+    title: "Gamma: list_markets + get_market by id/slug; decodes JSON-encoded string arrays"
+    spec:
+      file: src/caqrs/data/polymarket/gamma_client.py
+      section: "Module docstring (L1-L36)"
+    types:
+      - src/caqrs/data/polymarket/gamma_client.py::PolymarketGammaClient
+    tests:
+      - path: tests/test_polymarket_gamma.py
+        names: [test_get_market_with_numeric_id_uses_path_endpoint, test_get_market_with_slug_uses_list_endpoint_with_slug_filter, test_get_market_by_slug_raises_when_no_match, test_get_market_decodes_string_arrays, test_binary_market_convenience_properties, test_multi_outcome_market_skips_binary_helpers, test_yes_no_lookup_is_case_insensitive, test_get_market_handles_missing_optional_fields, test_get_market_accepts_already_decoded_arrays, test_get_market_invalid_outcomes_string_raises, test_end_date_z_suffix_parses, test_list_markets_parses_array_response, test_list_markets_parses_data_wrapped_response, test_list_markets_passes_filters_as_query_params, test_list_markets_sends_iso_dates, test_list_markets_omits_none_filters, test_404_raises_with_status_code, test_object_body_without_data_raises]
+    status: partial
+    notes: ""
+
+  - id: DATA-PM-A3
+    kind: functional
+    subsystem: data_polymarket
+    title: "Default rate limiter disables pacing; caller can inject paced limiter; shared limiter across CLOB/Gamma"
+    spec:
+      file: src/caqrs/data/polymarket/clob_client.py
+      section: "Module docstring rate-limit note (L23-L31)"
+    types:
+      - src/caqrs/data/_common/rate_limit.py::AsyncRateLimiter
+    tests:
+      - path: tests/test_polymarket_rate_limiter.py
+        names: [test_clob_default_limiter_disables_pacing, test_clob_caller_can_inject_paced_limiter, test_clob_paced_limiter_actually_paces, test_gamma_default_limiter_disables_pacing, test_gamma_caller_can_inject_paced_limiter, test_gamma_paced_limiter_actually_paces, test_independent_limiters_do_not_pace_each_other, test_shared_limiter_paces_across_clients]
+    status: partial
+    notes: ""
+
+  - id: DATA-PM-A4
+    kind: functional
+    subsystem: data_polymarket
+    title: "Polymarket signal helper: per-outcome graceful degradation on CLOB failure"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Graceful degradation (L196-L207)"
+    types:
+      - src/caqrs/data/polymarket/observer_signals.py
+    tests:
+      - path: tests/test_polymarket_observer_signals.py
+        names: [test_polymarket_outcome_rejects_probability_above_one, test_polymarket_signal_requires_tz_aware_fetched_at, test_polymarket_signal_binary_must_have_two_outcomes, test_fetch_signal_combines_metadata_and_pricing, test_fetch_signal_degrades_gracefully_on_clob_failure, test_fetch_signal_market_without_tokens_yields_placeholder, test_fetch_polymarket_signals_returns_tuple_in_input_order, test_observer_user_message_includes_polymarket_block, test_observer_user_message_skips_block_when_no_signals, test_observer_user_message_handles_multi_outcome_signal, test_observer_user_message_falls_through_when_yes_midpoint_missing]
+    status: formalized
+    notes: ""
+
+  - id: DATA-PM-A5
+    kind: functional
+    subsystem: data_polymarket
+    title: "Archive client: hourly parquet download, atomic write, on-disk cache"
+    spec:
+      file: src/caqrs/data/polymarket_archive/client.py
+      section: "Module docstring (L1-L11)"
+    types:
+      - src/caqrs/data/polymarket_archive/client.py
+    tests:
+      - path: tests/test_polymarket_archive_client.py
+        names: [test_cached_path_uses_hour_naming_convention, test_cached_path_truncates_minute_and_second, test_cached_path_requires_tz_aware_datetime, test_fetch_hour_downloads_when_cache_miss, test_fetch_hour_uses_cache_on_second_call, test_fetch_hour_writes_atomically, test_fetch_hour_404_raises_with_status_code, test_fetch_range_returns_paths_in_chronological_order, test_fetch_range_end_is_exclusive, test_fetch_range_rejects_end_before_start, test_fetch_range_rejects_naive_datetimes]
+    status: partial
+    notes: ""
+
+  - id: DATA-PM-A6
+    kind: functional
+    subsystem: data_polymarket
+    title: "Archive query: load_events with market / asset_id / event_type filters across multiple paths"
+    spec:
+      file: src/caqrs/data/polymarket_archive/query.py
+      section: "Module"
+    types:
+      - src/caqrs/data/polymarket_archive/query.py
+    tests:
+      - path: tests/test_polymarket_archive_query.py
+        names: [test_archive_event_kind_enum_covers_documented_values, test_load_events_no_filter_returns_all_rows, test_load_events_filters_by_market, test_load_events_filters_by_asset_id, test_load_events_filters_by_event_type_via_enum, test_load_events_filters_combine, test_load_events_returns_empty_when_no_match, test_load_events_across_multiple_paths, test_load_events_rejects_empty_path_list]
+    status: partial
+    notes: ""
+
+  # --- EDINET (official API) ---
+
+  - id: DATA-EDN-A1
+    kind: functional
+    subsystem: data_edinet
+    title: "Subscription-Key auth as query parameter; throttle 0.1s default"
+    spec:
+      file: src/caqrs/data/edinet/client.py
+      section: "Module docstring (L1-L24)"
+    types:
+      - src/caqrs/data/edinet/client.py::EdinetClient
+    tests:
+      - path: tests/test_edinet_client.py
+        names: [test_client_requires_api_key_at_first_call, test_from_env_reads_edinet_api_key, test_from_env_raises_when_missing, test_throttle_zero_disables_pacing]
+    status: partial
+    notes: "Spec PDF (ESE140206.pdf) referenced but not in-repo."
+
+  - id: DATA-EDN-A2
+    kind: functional
+    subsystem: data_edinet
+    title: "documents.json + documents/{docID} download with content-type discrimination"
+    spec:
+      file: src/caqrs/data/edinet/client.py
+      section: "Module docstring + endpoint methods"
+    types:
+      - src/caqrs/data/edinet/client.py::EdinetClient
+    tests:
+      - path: tests/test_edinet_client.py
+        names: [test_documents_list_returns_typed_records, test_documents_list_metadata_only_uses_type_1, test_documents_list_raises_on_metadata_404, test_documents_list_raises_on_metadata_400_with_message, test_401_with_flat_shape_raises_edinet_error, test_401_with_camelcase_status_key_also_recognised, test_download_document_returns_zip_bytes_on_octet_stream, test_download_document_returns_pdf_bytes_on_pdf_content_type, test_download_document_raises_when_content_type_is_json, test_download_document_passes_type_param, test_invalid_doc_type_rejected_at_call_time]
+    status: partial
+    notes: ""
+
+  - id: DATA-EDN-A3
+    kind: functional
+    subsystem: data_edinet
+    title: "Schemas: SEC code preserved as 5-digit string; documents-list typed records"
+    spec:
+      file: src/caqrs/data/edinet/schemas.py
+      section: "Module"
+    types:
+      - src/caqrs/data/edinet/schemas.py
+    tests:
+      - path: tests/test_edinet_schemas.py
+        names: [test_sec_code_5_digits_preserved_as_string]
+    status: partial
+    notes: ""
+
+  - id: DATA-EDN-A4
+    kind: functional
+    subsystem: data_edinet
+    title: "Recent-filings observer helper: walk date range, filter by edinet_codes / doc_type_codes"
+    spec:
+      file: src/caqrs/data/edinet/observer_signals.py
+      section: "Module"
+    types:
+      - src/caqrs/data/edinet/observer_signals.py
+    tests:
+      - path: tests/test_edinet_observer_signals.py
+        names: [test_fetch_recent_filings_single_day_no_filter, test_fetch_recent_filings_filters_by_edinet_codes, test_fetch_recent_filings_filters_by_doc_type_codes, test_fetch_recent_filings_walks_date_range, test_fetch_recent_filings_rejects_inverted_range, test_fetch_recent_filings_handles_empty_days]
+    status: partial
+    notes: ""
+
+  # --- EDINET DB (third-party DB) ---
+
+  - id: DATA-EDB-A1
+    kind: functional
+    subsystem: data_edinetdb
+    title: "Free plan hard cap: 100 requests / UTC day"
+    spec:
+      file: src/caqrs/data/edinetdb/quota.py
+      section: "Module docstring (L1-L21) + _DEFAULT_DAILY_CAP"
+    types:
+      - src/caqrs/data/edinetdb/quota.py
+    tests:
+      - path: tests/test_edinetdb_quota.py
+        names: [test_tracker_creates_db_lazily, test_default_daily_cap_is_100, test_zero_count_on_fresh_tracker, test_record_request_increments_count, test_yesterday_requests_dont_count_toward_today, test_late_night_request_belongs_to_calling_day, test_assert_quota_available_passes_below_cap, test_assert_quota_available_raises_at_cap, test_quota_resets_at_utc_midnight, test_log_persists_across_instances, test_purge_old_keeps_only_recent_days, test_custom_daily_cap_respected]
+    status: formalized
+    notes: ""
+
+  - id: DATA-EDB-A2
+    kind: functional
+    subsystem: data_edinetdb
+    title: "X-API-Key header auth; throttle pacing; 401/404 typed errors"
+    spec:
+      file: src/caqrs/data/edinetdb/client.py
+      section: "Module docstring (L1-L25)"
+    types:
+      - src/caqrs/data/edinetdb/client.py::EdinetDbClient
+    tests:
+      - path: tests/test_edinetdb_client.py
+        names: [test_list_companies_returns_typed_records, test_list_companies_passes_pagination_params, test_company_financials_returns_typed_records, test_ranking_roe_returns_sorted_records, test_client_requires_api_key_at_first_call, test_from_env_reads_edinetdb_api_key, test_from_env_raises_when_missing, test_401_raises_typed_error, test_404_raises_typed_error, test_throttle_zero_disables_pacing]
+    status: partial
+    notes: ""
+
+  - id: DATA-EDB-A3
+    kind: functional
+    subsystem: data_edinetdb
+    title: "TTL SQLite cache: companies 7d / financials 30d / rankings 7d"
+    spec:
+      file: src/caqrs/data/edinetdb/cache.py
+      section: "Module docstring (L1-L19) + DEFAULT_*_TTL_SECONDS"
+    types:
+      - src/caqrs/data/edinetdb/cache.py
+    tests:
+      - path: tests/test_edinetdb_cache.py
+        names: [test_cache_creates_db_lazily, test_companies_round_trips, test_companies_miss_returns_none, test_companies_pagination_key_distinguishes_pages, test_financials_round_trips, test_financials_miss_returns_none, test_different_edinet_codes_dont_collide, test_rankings_round_trips, test_rankings_endpoint_in_key, test_expired_companies_returns_none, test_expired_financials_returns_none, test_default_ttls_match_documented_cadence, test_cache_persists_across_instances, test_clear_drops_every_entry]
+    status: formalized
+    notes: ""
+
+  - id: DATA-EDB-A4
+    kind: functional
+    subsystem: data_edinetdb
+    title: "Cache hits do not consume daily quota; 401 does not consume quota"
+    spec:
+      file: src/caqrs/data/edinetdb/quota.py
+      section: "Module docstring 'counts only upstream HTTP calls' (L9-L14)"
+    types:
+      - src/caqrs/data/edinetdb/client.py::EdinetDbClient
+    tests:
+      - path: tests/test_edinetdb_client_quota.py
+        names: [test_successful_fetch_records_one_request, test_three_successful_fetches_record_three_requests, test_cache_hits_do_not_count_against_quota, test_quota_exhausted_blocks_http_before_dispatch, test_quota_remaining_after_one_call_is_cap_minus_one, test_401_response_does_not_consume_quota]
+    status: formalized
+    notes: ""
+
+  - id: DATA-EDB-A5
+    kind: functional
+    subsystem: data_edinetdb
+    title: "Client+cache integration: writes on miss, hits skip HTTP, pagination keys don't collide"
+    spec:
+      file: src/caqrs/data/edinetdb/client.py
+      section: "Module docstring + cache field"
+    types:
+      - src/caqrs/data/edinetdb/client.py::EdinetDbClient
+      - src/caqrs/data/edinetdb/cache.py
+    tests:
+      - path: tests/test_edinetdb_client_cache.py
+        names: [test_list_companies_writes_to_cache_on_miss, test_list_companies_pagination_keys_dont_collide, test_company_financials_writes_to_cache, test_different_edinet_codes_cache_independently, test_ranking_roe_writes_to_cache, test_different_limits_cache_independently, test_prepopulated_cache_avoids_http_entirely]
+    status: formalized
+    notes: ""
+
+  - id: DATA-EDB-A6
+    kind: functional
+    subsystem: data_edinetdb
+    title: "company_fundamentals helper: latest year, YoY growth, null-revenue handling"
+    spec:
+      file: src/caqrs/data/edinetdb/observer_signals.py
+      section: "Module"
+    types:
+      - src/caqrs/data/edinetdb/observer_signals.py
+    tests:
+      - path: tests/test_edinetdb_observer_signals.py
+        names: [test_company_fundamentals_is_frozen, test_single_year_returns_no_growth_metrics, test_two_year_history_computes_yoy_growth, test_picks_latest_year_when_input_is_unsorted, test_no_financials_returns_empty_snapshot, test_yoy_is_none_when_prior_year_has_null_revenue, test_latest_period_attached_for_caller_inspection]
+    status: partial
+    notes: ""
+
+  # --- _common rate limiter ---
+
+  - id: DATA-COMMON-A1
+    kind: functional
+    subsystem: data_common
+    title: "AsyncRateLimiter: min-interval pacing + 429 backoff schedule (default 30/60/90s)"
+    spec:
+      file: src/caqrs/data/_common/rate_limit.py
+      section: "Module docstring (L1-L26)"
+    types:
+      - src/caqrs/data/_common/rate_limit.py::AsyncRateLimiter
+    tests:
+      - path: tests/test_data_common_rate_limit.py
+        names: [test_first_acquire_does_not_sleep, test_second_acquire_waits_for_min_interval, test_zero_interval_disables_pacing, test_on_429_returns_next_backoff, test_on_429_caps_at_last_schedule_value, test_reset_429_starts_schedule_over, test_default_retry_schedule_is_30_60_90, test_shared_limiter_paces_acquires_globally]
+    status: partial
+    notes: "No ADR; spec lives in module docstring + tests."
+
+  # =====================================================================
+  # PROVIDER ABSTRACTION (LLM, ADR-0002 + ADR-0003)
+  # =====================================================================
+
+  - id: PROV-A1
+    kind: functional
+    subsystem: providers
+    title: "Provider protocol: complete + is_configured; structural typing"
+    spec:
+      file: docs/decisions/0002-provider-strategy.md
+      section: "Decision (L25-L40)"
+    types:
+      - src/caqrs/providers/base.py
+      - src/caqrs/providers/types.py
+    tests:
+      - path: tests/test_provider_protocol.py
+        names: [test_anthropic_cli_satisfies_protocol, test_codex_cli_satisfies_protocol, test_openai_compat_satisfies_protocol, test_openai_compat_validates_constructor, test_anthropic_is_configured_false_with_no_creds, test_anthropic_is_configured_true_with_file_creds, test_codex_is_configured_false_with_no_creds, test_codex_is_configured_true_with_file_creds]
+    status: formalized
+    notes: ""
+
+  - id: PROV-A2
+    kind: functional
+    subsystem: providers
+    title: "Ordered fallback chain; warm-path bias on last-successful provider"
+    spec:
+      file: docs/decisions/0002-provider-strategy.md
+      section: "ProviderRegistry (L34-L36)"
+    types:
+      - src/caqrs/providers/registry.py
+    tests:
+      - path: tests/test_provider_registry.py
+        names: [test_registry_requires_non_empty, test_registry_uses_first_provider_when_healthy, test_registry_falls_through_provider_errors, test_registry_warm_path_prefers_last_successful, test_registry_raises_last_error_when_all_fail, test_registry_propagates_non_provider_exception]
+    status: formalized
+    notes: ""
+
+  - id: PROV-A3
+    kind: functional
+    subsystem: providers
+    title: "Anthropic Claude CLI provider: OAuth + API-key, error mapping, tool-use schema"
+    spec:
+      file: docs/decisions/0002-provider-strategy.md
+      section: "AnthropicViaClaudeCLI (L27)"
+    types:
+      - src/caqrs/providers/anthropic_cli.py
+    tests:
+      - path: tests/test_anthropic_cli.py
+        names: [test_oauth_token_detected_by_marker, test_oauth_headers, test_api_key_headers, test_schema_to_tool_def_uses_input_schema, test_is_configured_false_without_creds, test_is_configured_true_with_creds, test_complete_raises_when_not_logged_in, test_complete_raises_when_cred_expired, test_oauth_round_trip, test_api_key_round_trip, test_system_messages_consolidated, test_complete_maps_401_to_auth_error, test_complete_maps_403_to_auth_error, test_complete_maps_429_to_rate_limit, test_complete_maps_5xx_to_network_error, test_complete_maps_400_to_provider_error, test_complete_maps_timeout, test_complete_maps_connect_error, test_complete_raises_when_no_tool_use_block, test_complete_raises_when_unexpected_tool_name, test_complete_raises_when_input_fails_validation]
+    status: formalized
+    notes: ""
+
+  - id: PROV-A4
+    kind: functional
+    subsystem: providers
+    title: "OpenAI Codex CLI provider: bearer + account-id headers, error mapping, tool-call validation"
+    spec:
+      file: docs/decisions/0002-provider-strategy.md
+      section: "OpenAIViaCodexCLI (L28)"
+    types:
+      - src/caqrs/providers/codex_cli.py
+    tests:
+      - path: tests/test_codex_cli.py
+        names: [test_headers_set_bearer_and_account_id, test_headers_omit_account_id_when_absent, test_schema_to_tool_def_is_flat, test_is_configured_false_without_creds, test_is_configured_true_with_creds, test_complete_raises_when_not_logged_in, test_complete_raises_when_cred_expired, test_round_trip_includes_account_id, test_round_trip_without_account_id, test_complete_maps_401_to_auth_error, test_complete_maps_429_to_rate_limit, test_complete_maps_5xx_to_network_error, test_complete_maps_400_to_provider_error, test_complete_maps_timeout, test_complete_raises_when_no_function_call, test_complete_raises_when_unexpected_tool_name, test_complete_raises_when_arguments_invalid_json, test_complete_raises_when_arguments_fail_validation]
+    status: formalized
+    notes: ""
+
+  - id: PROV-A5
+    kind: functional
+    subsystem: providers
+    title: "OpenAI-compatible HTTP provider: tool-call structured output, error mapping"
+    spec:
+      file: docs/decisions/0002-provider-strategy.md
+      section: "OpenAICompatProvider (L29-L30)"
+    types:
+      - src/caqrs/providers/openai_compat.py
+    tests:
+      - path: tests/test_openai_compat.py
+        names: [test_schema_to_tool_def_drops_dollar_schema, test_schema_to_tool_def_uses_docstring, test_complete_returns_typed_output, test_complete_extracts_token_usage, test_complete_sends_correct_payload, test_complete_maps_401_to_auth_error, test_complete_maps_403_to_auth_error, test_complete_maps_429_to_rate_limit, test_complete_maps_5xx_to_network_error, test_complete_maps_400_to_provider_error, test_complete_maps_timeout_to_network_error, test_complete_maps_connect_error_to_network_error, test_complete_raises_when_no_tool_call, test_complete_raises_when_arguments_invalid_json, test_complete_raises_when_arguments_fail_schema_validation, test_complete_raises_on_non_object_body]
+    status: formalized
+    notes: ""
+
+  - id: PROV-A6
+    kind: functional
+    subsystem: providers
+    title: "Pre-flight expiry detection: AuthError carries expires_at + renewal command (no auto-refresh)"
+    spec:
+      file: docs/decisions/0003-oauth-refresh-deferred.md
+      section: "Decision (L39-L51); Implementation locus (L84-L91)"
+    types:
+      - src/caqrs/providers/_cli_creds.py
+      - src/caqrs/providers/errors.py
+    tests:
+      - path: tests/test_cli_creds.py
+        names: [test_is_cred_fresh_with_far_future_expiry, test_is_cred_fresh_rejects_past_expiry, test_is_cred_fresh_skew_treats_near_expiry_as_stale, test_format_expiry_iso_renders_utc]
+    status: formalized
+    notes: ""
+
+  - id: PROV-A7
+    kind: functional
+    subsystem: providers
+    title: "CLI credential loaders: file path layout, JWT exp parsing, fallback chain"
+    spec:
+      file: docs/decisions/0002-provider-strategy.md
+      section: "Compliance posture (L66-L75)"
+    types:
+      - src/caqrs/providers/_cli_creds.py
+    tests:
+      - path: tests/test_cli_creds.py
+        names: [test_claude_path_default_under_home, test_codex_path_explicit_home_takes_precedence, test_codex_path_uses_env, test_codex_path_falls_back_to_home, test_load_claude_oauth, test_load_claude_token_only, test_load_claude_returns_none_when_missing, test_load_claude_returns_none_for_malformed_json, test_load_claude_returns_none_for_missing_oauth_block, test_load_claude_returns_none_for_empty_token, test_load_claude_returns_none_for_invalid_expires, test_decode_jwt_exp_returns_ms, test_decode_jwt_exp_handles_short_token, test_decode_jwt_exp_handles_invalid_base64, test_decode_jwt_exp_handles_missing_exp, test_decode_jwt_exp_rejects_non_numeric, test_decode_jwt_exp_rejects_non_positive, test_codex_expiry_uses_jwt_exp_when_present, test_codex_expiry_falls_back_to_last_refresh_iso, test_codex_expiry_falls_back_to_last_refresh_epoch_ms, test_codex_expiry_falls_back_to_now_when_unparseable, test_load_codex_oauth_full_payload, test_load_codex_oauth_minimal_payload, test_load_codex_returns_none_when_missing, test_load_codex_requires_refresh_token, test_load_codex_returns_none_for_malformed_json]
+    status: formalized
+    notes: ""
+
+  - id: PROV-A8
+    kind: functional
+    subsystem: providers
+    title: "macOS Keychain fallback for credentials when file storage is missing/invalid"
+    spec:
+      file: src/caqrs/providers/_cli_creds.py
+      section: "Module"
+    types:
+      - src/caqrs/providers/_cli_creds.py
+    tests:
+      - path: tests/test_cli_creds_keychain.py
+        names: [test_codex_keychain_account_format, test_codex_keychain_account_differs_per_path, test_real_keychain_reader_returns_none_on_non_darwin, test_real_keychain_reader_handles_security_failure, test_real_keychain_reader_returns_stripped_stdout_on_success, test_claude_keychain_used_when_file_missing, test_claude_keychain_returns_token_when_no_refresh, test_claude_file_takes_precedence_over_keychain, test_claude_keychain_consulted_when_file_invalid, test_claude_keychain_returns_none_for_malformed_payload, test_claude_keychain_returns_none_when_reader_yields_none, test_codex_keychain_used_when_file_missing, test_codex_file_takes_precedence_over_keychain, test_codex_keychain_consulted_when_file_invalid, test_codex_keychain_uses_resolved_home_for_account, test_default_loaders_do_not_touch_real_keychain]
+    status: partial
+    notes: "Keychain fallback not called out in ADR-0002; promote to spec when the next provider port lands."
+
+  # =====================================================================
+  # AGENTS (Observer / Hypothesis / Skeptic / Research / Auditor / Decider)
+  # =====================================================================
+  # Each agent has input + output + prompt invariant. Codex audit flagged
+  # most of these as `partial` because the spec is schema-shaped (the
+  # Pydantic model + the role_brief / emit_tool_description constants),
+  # not behaviour-shaped (no acceptance criteria for output content quality).
+
+  - id: AGENT-PROTO-1
+    kind: functional
+    subsystem: agents
+    title: "Agent[I, O] protocol: async run(payload) -> AgentResult[O], frozen schemas"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Agent contract (L67-L78)"
+    types:
+      - src/caqrs/agents/protocol.py
+    tests:
+      - path: tests/test_protocol.py
+        names: [test_agent_protocol_structural_match, test_agent_returns_typed_result, test_agent_result_error_path]
+    status: formalized
+    notes: ""
+
+  - id: AGENT-LLM-1
+    kind: functional
+    subsystem: agents
+    title: "LLMAgent base: tool-call extraction, parent_id propagation, provider error wrapping"
+    spec:
+      file: src/caqrs/agents/base_llm_agent.py
+      section: "Module"
+    types:
+      - src/caqrs/agents/base_llm_agent.py::LLMAgent
+    tests:
+      - path: tests/test_agents_base_llm_agent.py
+        names: [test_emit_tool_name_derives_from_output_schema, test_system_prompt_contains_role_and_emit_tool, test_default_user_message_is_json_dump, test_run_succeeds_and_propagates_usage, test_run_passes_messages_and_schema_to_provider, test_run_uses_configured_max_tokens_and_temperature, test_run_records_parent_id_when_provided, test_run_wraps_provider_error_into_agent_result, test_run_wraps_network_error, test_run_does_not_swallow_non_provider_exceptions, test_run_rejects_wrong_input_type, test_agent_result_is_frozen]
+    status: partial
+    notes: ""
+
+  - id: AGENT-PROMPTS-1
+    kind: functional
+    subsystem: agents
+    title: "Prompt builder: role + guardrails + emit-tool reference; deterministic; rejects empty inputs"
+    spec:
+      file: src/caqrs/agents/prompts/role_template.py
+      section: "Module"
+    types:
+      - src/caqrs/agents/prompts/role_template.py
+      - src/caqrs/agents/prompts/guardrails.py
+    tests:
+      - path: tests/test_agents_prompts.py
+        names: [test_guardrails_has_research_specific_clauses, test_guardrails_is_concise, test_build_assembles_role_guardrails_and_emit_tool, test_build_mentions_emit_tool_name_at_least_twice, test_build_strips_whitespace_from_inputs, test_build_rejects_empty_inputs, test_build_is_deterministic]
+    status: partial
+    notes: ""
+
+  - id: AGENT-OBS-A1
+    kind: functional
+    subsystem: agents
+    title: "ObserverInput schema: universe (no dups), as_of (tz-aware), horizon_days bounds, dimensions"
+    spec:
+      file: src/caqrs/schemas/observer.py
+      section: "Module"
+    types:
+      - src/caqrs/schemas/observer.py::ObserverInput
+    tests:
+      - path: tests/test_agent_artifact_schemas.py
+        names: [test_observer_input_roundtrip, test_observer_input_rejects_naive_datetime, test_observer_input_rejects_duplicate_universe, test_observer_input_rejects_duplicate_dimensions, test_observer_input_horizon_within_bounds]
+    status: formalized
+    notes: ""
+
+  - id: AGENT-OBS-A2
+    kind: functional
+    subsystem: agents
+    title: "ObserverArtifact: snapshots ⊆ universe, no duplicate tickers, no duplicate universe entries"
+    spec:
+      file: src/caqrs/schemas/observer.py
+      section: "Module"
+    types:
+      - src/caqrs/schemas/observer.py::ObserverArtifact
+      - src/caqrs/schemas/observer.py::AssetSnapshot
+    tests:
+      - path: tests/test_agent_artifact_schemas.py
+        names: [test_observer_artifact_roundtrip_minimal, test_observer_artifact_with_full_payload, test_observer_artifact_rejects_snapshot_outside_universe, test_observer_artifact_rejects_duplicate_snapshot_tickers, test_observer_artifact_rejects_duplicate_universe]
+    status: formalized
+    notes: ""
+
+  - id: AGENT-OBS-A3
+    kind: functional
+    subsystem: agents
+    title: "Observer agent: emit-tool name + role brief + run accepts ObserverInput, rejects others"
+    spec:
+      file: src/caqrs/agents/observer.py
+      section: "Module docstring + role_brief"
+    types:
+      - src/caqrs/agents/observer.py::ObserverAgent
+    tests:
+      - path: tests/test_concrete_agents.py
+        names: [test_observer_emit_tool_name, test_observer_system_prompt_contains_role_and_emit, test_observer_run_succeeds, test_observer_run_rejects_wrong_input]
+    status: partial
+    notes: "Behaviour invariants beyond schema (e.g., 'data quality concerns are populated when …') are tacit; only schema and tool-name are formal."
+
+  - id: AGENT-OBS-A4
+    kind: functional
+    subsystem: agents
+    title: "Polymarket signals fold into Observer user message when present"
+    spec:
+      file: src/caqrs/agents/observer.py
+      section: "P1.6.c (L13-L18)"
+    types:
+      - src/caqrs/agents/prompts/polymarket.py
+    tests:
+      - path: tests/test_polymarket_observer_signals.py
+        names: [test_observer_user_message_includes_polymarket_block, test_observer_user_message_skips_block_when_no_signals, test_observer_user_message_handles_multi_outcome_signal, test_observer_user_message_falls_through_when_yes_midpoint_missing]
+    status: formalized
+    notes: ""
+
+  - id: AGENT-HYP-A1
+    kind: functional
+    subsystem: agents
+    title: "HypothesisCard: window inverted rejected, universe deduplicated, acceptance criteria typed"
+    spec:
+      file: src/caqrs/schemas/hypothesis_card.py
+      section: "Module"
+    types:
+      - src/caqrs/schemas/hypothesis_card.py::HypothesisCard
+      - src/caqrs/schemas/hypothesis_card.py::AcceptanceCriterion
+    tests:
+      - path: tests/test_artifact_roundtrip.py
+        names: [test_hypothesis_card_roundtrip, test_hypothesis_card_rejects_inverted_window, test_hypothesis_card_rejects_duplicate_universe]
+    status: formalized
+    notes: ""
+
+  - id: AGENT-HYP-A2
+    kind: functional
+    subsystem: agents
+    title: "Hypothesis agent: input ObserverArtifact → HypothesisCard; polymarket block woven in"
+    spec:
+      file: src/caqrs/agents/hypothesis.py
+      section: "Module docstring"
+    types:
+      - src/caqrs/agents/hypothesis.py::HypothesisAgent
+    tests:
+      - path: tests/test_concrete_agents.py
+        names: [test_hypothesis_emit_tool_name, test_hypothesis_run_succeeds]
+      - path: tests/test_hypothesis_polymarket_prompt.py
+        names: [test_hypothesis_user_message_includes_polymarket_block_when_present, test_hypothesis_user_message_omits_block_without_signals, test_format_polymarket_block_returns_empty_string_for_empty_input, test_format_polymarket_block_handles_binary_with_yes_midpoint, test_observer_and_hypothesis_share_identical_block_rendering]
+    status: partial
+    notes: ""
+
+  - id: AGENT-SKE-A1
+    kind: functional
+    subsystem: agents
+    title: "SkepticReport: PROCEED forbids fatal path; KILL requires fatal-or-concern"
+    spec:
+      file: src/caqrs/schemas/skeptic.py
+      section: "Module"
+    types:
+      - src/caqrs/schemas/skeptic.py::SkepticReport
+      - src/caqrs/schemas/skeptic.py::SkepticVerdict
+    tests:
+      - path: tests/test_agent_artifact_schemas.py
+        names: [test_skeptic_report_proceed_roundtrip, test_skeptic_report_kill_with_fatal_path_roundtrip, test_skeptic_report_kill_requires_fatal_or_concern, test_skeptic_report_proceed_rejects_fatal_path]
+    status: formalized
+    notes: ""
+
+  - id: AGENT-SKE-A2
+    kind: functional
+    subsystem: agents
+    title: "Skeptic agent: HypothesisCard → SkepticReport; emit tool wired"
+    spec:
+      file: src/caqrs/agents/skeptic.py
+      section: "Module"
+    types:
+      - src/caqrs/agents/skeptic.py::SkepticAgent
+    tests:
+      - path: tests/test_concrete_agents.py
+        names: [test_skeptic_emit_tool_name, test_skeptic_run_succeeds]
+    status: partial
+    notes: ""
+
+  - id: AGENT-RES-A1
+    kind: functional
+    subsystem: agents
+    title: "ResearchInput composes HypothesisCard + SkepticReport; frozen, extra=forbid"
+    spec:
+      file: src/caqrs/agents/research.py
+      section: "Module"
+    types:
+      - src/caqrs/agents/research.py::ResearchInput
+    tests:
+      - path: tests/test_concrete_agents.py
+        names: [test_research_input_is_frozen, test_research_input_rejects_extras]
+    status: formalized
+    notes: ""
+
+  - id: AGENT-RES-A2
+    kind: functional
+    subsystem: agents
+    title: "Research agent: ResearchInput → ResearchPlan with walk-forward windows"
+    spec:
+      file: src/caqrs/agents/research.py
+      section: "Module"
+    types:
+      - src/caqrs/agents/research.py::ResearchAgent
+    tests:
+      - path: tests/test_concrete_agents.py
+        names: [test_research_emit_tool_name, test_research_run_succeeds]
+    status: partial
+    notes: ""
+
+  - id: AGENT-AUD-A1
+    kind: functional
+    subsystem: agents
+    title: "AuditReport: PASS requires every check passed; FAIL requires at least one failed; ≥1 check required"
+    spec:
+      file: src/caqrs/schemas/audit.py
+      section: "Module"
+    types:
+      - src/caqrs/schemas/audit.py::AuditReport
+      - src/caqrs/schemas/audit.py::AuditVerdict
+      - src/caqrs/schemas/audit.py::AcceptanceCheck
+    tests:
+      - path: tests/test_agent_artifact_schemas.py
+        names: [test_audit_report_pass_roundtrip, test_audit_report_fail_roundtrip, test_audit_report_pass_requires_all_checks_pass, test_audit_report_fail_requires_at_least_one_check_fail, test_audit_report_requires_at_least_one_check]
+    status: formalized
+    notes: ""
+
+  - id: AGENT-AUD-A2
+    kind: functional
+    subsystem: agents
+    title: "Auditor agent: AuditorInput (HypothesisCard + BacktestReport) → AuditReport"
+    spec:
+      file: src/caqrs/agents/auditor.py
+      section: "Module"
+    types:
+      - src/caqrs/agents/auditor.py::AuditorAgent
+      - src/caqrs/agents/auditor.py::AuditorInput
+    tests:
+      - path: tests/test_concrete_agents.py
+        names: [test_auditor_emit_tool_name, test_auditor_run_succeeds, test_auditor_input_is_frozen]
+    status: partial
+    notes: ""
+
+  - id: AGENT-DEC-A1
+    kind: functional
+    subsystem: agents
+    title: "StrategyDecision: ADOPT requires targets; REJECT/DEFER forbid targets; weights ≤ max + sum ≤ 1; no dup tickers"
+    spec:
+      file: src/caqrs/schemas/decision.py
+      section: "Module"
+    types:
+      - src/caqrs/schemas/decision.py::StrategyDecision
+      - src/caqrs/schemas/decision.py::DecisionAction
+      - src/caqrs/schemas/decision.py::TargetPosition
+      - src/caqrs/schemas/decision.py::Side
+    tests:
+      - path: tests/test_artifact_roundtrip.py
+        names: [test_strategy_decision_adopt_roundtrip, test_strategy_decision_reject_must_have_no_targets, test_strategy_decision_adopt_requires_targets, test_strategy_decision_weight_exceeds_max, test_strategy_decision_sum_weights_exceeds_one, test_strategy_decision_rejects_duplicate_tickers]
+    status: formalized
+    notes: ""
+
+  - id: AGENT-DEC-A2
+    kind: functional
+    subsystem: agents
+    title: "Decider agent: DeciderInput (Hypothesis + Backtest + Audit) → StrategyDecision; only runs when audit PASS"
+    spec:
+      file: src/caqrs/agents/decider.py
+      section: "Module"
+    types:
+      - src/caqrs/agents/decider.py::DeciderAgent
+      - src/caqrs/agents/decider.py::DeciderInput
+    tests:
+      - path: tests/test_orchestrator_cycle_runner.py
+        names: [test_decider_input_carries_audit_and_backtest, test_decider_decision_action_can_be_reject]
+    status: partial
+    notes: "DeciderAgent itself has no dedicated test file; cycle runner tests cover the input contract via stubs."
+
+  - id: AGENT-PIPELINE-1
+    kind: functional
+    subsystem: agents
+    title: "Pipeline input/output chain typechecks: Observer → Hypothesis → Skeptic → Research → Auditor → Decider"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "CycleRunner pipeline (L17-L23)"
+    types:
+      - src/caqrs/agents/protocol.py
+    tests:
+      - path: tests/test_concrete_agents.py
+        names: [test_pipeline_input_output_chain_compiles]
+    status: formalized
+    notes: ""
+
+  # =====================================================================
+  # BACKTEST LAYER (P2): walk_forward engine + strategy templates
+  # =====================================================================
+
+  - id: BACKTEST-A1
+    kind: functional
+    subsystem: backtest
+    title: "Walk-forward engine: per-fold returns, 1-day signal lag (no lookahead), per-fold + aggregate metrics"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Backtest layer (P2) (L141-L162)"
+    types:
+      - src/caqrs/backtest/engine.py
+      - src/caqrs/schemas/backtest_report.py::BacktestReport
+      - src/caqrs/schemas/backtest_report.py::FoldMetrics
+      - src/caqrs/schemas/backtest_report.py::AggregateMetrics
+    tests:
+      - path: tests/test_backtest_engine.py
+        names: [test_walk_forward_single_fold_flat_prices_yields_zero_pnl, test_walk_forward_single_fold_constant_uptrend_compounds_returns, test_walk_forward_max_drawdown_captured, test_walk_forward_lags_signals_one_day, test_walk_forward_applies_cost_on_position_changes, test_walk_forward_two_folds_aggregates, test_walk_forward_raises_when_signal_references_unknown_ticker, test_walk_forward_raises_on_empty_test_window]
+    status: formalized
+    notes: ""
+
+  - id: BACKTEST-A2
+    kind: functional
+    subsystem: backtest
+    title: "Strategy template registry: discriminated union BuyAndHold / Momentum / MeanReversion + JSON round-trip"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Strategy templates (L149-L160)"
+    types:
+      - src/caqrs/backtest/templates.py
+    tests:
+      - path: tests/test_backtest_strategy_registry.py
+        names: [test_buy_and_hold_spec_has_correct_discriminator, test_momentum_spec_construction, test_momentum_spec_default_top_k_is_none, test_momentum_spec_rejects_nonpositive_lookback, test_mean_reversion_spec_construction, test_strategy_spec_is_frozen_extra_forbid, test_momentum_spec_rejects_unknown_field, test_strategy_spec_union_parses_buy_and_hold, test_strategy_spec_union_parses_momentum, test_strategy_spec_union_parses_mean_reversion, test_strategy_spec_union_rejects_unknown_template, test_strategy_spec_union_round_trips_through_json, test_make_jquants_executor_dispatches_buy_and_hold, test_make_jquants_executor_dispatches_momentum, test_make_jquants_executor_dispatches_mean_reversion, test_dispatched_executor_runs_full_pipeline, test_make_jquants_executor_carries_notional_through]
+    status: formalized
+    notes: ""
+
+  - id: BACKTEST-A3
+    kind: functional
+    subsystem: backtest
+    title: "Momentum: top_k=universe matches buy-and-hold; top_1 picks highest lookback return; symmetric ranking"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Strategy templates / momentum (L150-L161)"
+    types:
+      - src/caqrs/backtest/templates.py
+    tests:
+      - path: tests/test_backtest_momentum.py
+        names: [test_momentum_top_k_equals_universe_size_matches_buy_and_hold, test_momentum_top_1_picks_highest_lookback_return, test_momentum_zero_weights_when_insufficient_history, test_momentum_top_k_default_is_full_universe, test_momentum_rejects_top_k_larger_than_universe, test_momentum_rejects_nonpositive_lookback, test_momentum_signals_compose_with_run_walk_forward, test_make_jquants_momentum_executor_returns_protocol, test_make_jquants_momentum_executor_pre_fetches_with_buffer, test_make_jquants_momentum_executor_runs_full_pipeline]
+    status: formalized
+    notes: ""
+
+  - id: BACKTEST-A4
+    kind: functional
+    subsystem: backtest
+    title: "Mean reversion: bottom_k symmetric to momentum top_k"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Strategy templates (L150-L156)"
+    types:
+      - src/caqrs/backtest/templates.py
+    tests:
+      - path: tests/test_backtest_mean_reversion.py
+        names: [test_mean_reversion_bottom_1_picks_lowest_lookback_return, test_mean_reversion_bottom_k_equals_universe_size_matches_buy_and_hold, test_mean_reversion_bottom_k_default_is_full_universe, test_mean_reversion_zero_weights_when_insufficient_history, test_mean_reversion_rejects_bottom_k_larger_than_universe, test_mean_reversion_rejects_nonpositive_lookback, test_mean_reversion_signals_compose_with_run_walk_forward, test_make_mean_reversion_executor_returns_protocol, test_make_mean_reversion_executor_pre_fetches_with_buffer, test_make_mean_reversion_executor_runs_full_pipeline]
+    status: formalized
+    notes: ""
+
+  - id: BACKTEST-A5
+    kind: functional
+    subsystem: backtest
+    title: "JQuants price provider: pre-fetch 2× lookback buffer; uses adjusted close; skips null closes"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Backtest providers (L155-L162)"
+    types:
+      - src/caqrs/backtest/providers.py
+    tests:
+      - path: tests/test_backtest_providers.py
+        names: [test_buy_and_hold_signals_distributes_weight_equally, test_buy_and_hold_signals_uses_distinct_dates_from_prices, test_price_provider_fetches_each_ticker_in_universe, test_price_provider_uses_adjusted_close_when_present, test_price_provider_skips_null_closes, test_price_provider_passes_window_to_jquants, test_executor_runs_full_pipeline_against_mocked_jquants, test_executor_satisfies_backtest_executor_protocol, test_executor_spans_min_test_start_to_max_test_end_across_folds, test_buy_and_hold_signals_align_with_run_walk_forward, test_buy_and_hold_signals_empty_universe_returns_empty_signals, test_buy_and_hold_signals_window_outside_dates_yields_zero_rows]
+    status: formalized
+    notes: ""
+
+  - id: BACKTEST-A6
+    kind: functional
+    subsystem: backtest
+    title: "BacktestReport schema: contiguous fold indices; report round-trips through JSON"
+    spec:
+      file: src/caqrs/schemas/backtest_report.py
+      section: "Module"
+    types:
+      - src/caqrs/schemas/backtest_report.py::BacktestReport
+    tests:
+      - path: tests/test_artifact_roundtrip.py
+        names: [test_backtest_report_roundtrip_minimal, test_backtest_report_rejects_non_contiguous_fold_index]
+    status: formalized
+    notes: ""
+
+  # =====================================================================
+  # API LAYER (FastAPI surface)
+  # =====================================================================
+
+  - id: API-A1
+    kind: functional
+    subsystem: api
+    title: "FastAPI app exposes /openapi.json, /docs (Swagger), /redoc, /health"
+    spec:
+      file: src/caqrs/api/app.py
+      section: "Module"
+    types:
+      - src/caqrs/api/app.py
+    tests:
+      - path: tests/test_api_app_skeleton.py
+        names: [test_openapi_endpoint_returns_valid_spec, test_swagger_ui_is_served, test_redoc_is_served, test_core_schemas_appear_in_openapi_components, test_health_endpoint_returns_ok]
+    status: partial
+    notes: "No dedicated ADR; behaviour is test-anchored."
+
+  # =====================================================================
+  # NON-FUNCTIONAL REQUIREMENTS — placeholders. Task #79 fills targets +
+  # measurement methodology; Task #89 lands gating tests.
+  # =====================================================================
+
+  - id: NFR-PERF-1
+    kind: non-functional
+    subsystem: entities
+    title: "Issuer lookup latency (in-memory and DuckDB)"
+    spec:
+      file: docs/requirements/non-functional.md
+      section: "NFR-PERF-1 placeholder"
+    target:
+      metric: "issuer lookup p95 latency"
+      threshold: "<= 5ms at 10k issuers (DuckDB), <= 1ms (in-memory)"
+      measurement: "pytest-benchmark in tests/perf/ (Task #89)"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Placeholder until #79 catalogues NFRs and #89 adds the gate."
+
+  - id: NFR-PERF-2
+    kind: non-functional
+    subsystem: orchestrator
+    title: "End-to-end cycle latency (stub providers, no I/O)"
+    spec:
+      file: docs/requirements/non-functional.md
+      section: "NFR-PERF-2 placeholder"
+    target:
+      metric: "CycleRunner.run() median latency with stub agents"
+      threshold: "TBD (Task #79)"
+      measurement: "pytest-benchmark; tests/perf/test_cycle_latency.py (Task #89)"
+    types: []
+    tests: []
+    status: deferred
+    notes: ""
+
+  - id: NFR-PERF-3
+    kind: non-functional
+    subsystem: backtest
+    title: "Walk-forward engine throughput on representative universe"
+    spec:
+      file: docs/requirements/non-functional.md
+      section: "NFR-PERF-3 placeholder"
+    target:
+      metric: "run_walk_forward folds/sec at universe=200, history=2y"
+      threshold: "TBD (Task #79)"
+      measurement: "pytest-benchmark in tests/perf/ (Task #89)"
+    types: []
+    tests: []
+    status: deferred
+    notes: ""
+
+  - id: NFR-SEC-1
+    kind: non-functional
+    subsystem: providers
+    title: "Subscription credentials never extracted; only CLI session paths read"
+    spec:
+      file: docs/requirements/non-functional.md
+      section: "NFR-SEC-1 placeholder"
+    target:
+      metric: "credential read sites match {~/.claude, ~/.codex/sessions, macOS Keychain}"
+      threshold: "no other read sites (audited via grep + ADR-0002 compliance posture)"
+      measurement: "manual audit + linter rule (Task #79+)"
+    types: []
+    tests: []
+    status: deferred
+    notes: "Existing posture in ADR-0002 / ADR-0003. Promote to formal NFR with measurable check in #79."
+
+  - id: NFR-SEC-2
+    kind: non-functional
+    subsystem: api
+    title: "FastAPI surface does not leak credentials in errors / openapi spec"
+    spec:
+      file: docs/requirements/non-functional.md
+      section: "NFR-SEC-2 placeholder"
+    target:
+      metric: "no credential strings in openapi.json or 4xx/5xx responses"
+      threshold: "TBD (Task #79)"
+      measurement: "schemathesis + linter (Task #89)"
+    types: []
+    tests: []
+    status: deferred
+    notes: ""
+
+  - id: NFR-REL-1
+    kind: non-functional
+    subsystem: orchestrator
+    title: "Graceful degradation: provider / data / broker failure never crashes the runner"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Graceful degradation (L196-L207)"
+    target:
+      metric: "CycleRunner.run() returns CycleResult with aborted_reason on every external failure"
+      threshold: "verified by negative tests (already tacit in current suite)"
+      measurement: "promote to NFR doc + traces (#79 / #80)"
+    types: []
+    tests: []
+    status: partial
+    notes: "Behavior is enforced by tests; no NFR doc captures it as a measurable target yet."
+
+  - id: NFR-REL-2
+    kind: non-functional
+    subsystem: data_edinetdb
+    title: "Daily quota cap respected even after process restart"
+    spec:
+      file: src/caqrs/data/edinetdb/quota.py
+      section: "Module docstring (persistence rationale)"
+    target:
+      metric: "rolling 24-hour HTTP request count never exceeds the configured cap"
+      threshold: "100 (free tier default)"
+      measurement: "test_log_persists_across_instances + future end-to-end soak (Task #89)"
+    types:
+      - src/caqrs/data/edinetdb/quota.py
+    tests: []
+    status: partial
+    notes: "Quota tracker is formalized at the unit level; the cross-cutting NFR is a placeholder."
+
+  - id: NFR-MAINT-1
+    kind: non-functional
+    subsystem: cross_cutting
+    title: "Strict type-checking gate (mypy --strict + pydantic strict + frozen)"
+    spec:
+      file: docs/decisions/0004-python-reaffirmed-after-mercury-survey.md
+      section: "Implementation guidance for P1.2 onward (L210-L235)"
+    target:
+      metric: "mypy --strict passes on src/"
+      threshold: "0 errors"
+      measurement: "uv run --frozen mypy src (CI)"
+    types: []
+    tests: []
+    status: partial
+    notes: "Already in CI; formalize as NFR with a quoted command in #79."
+
+  - id: NFR-MAINT-2
+    kind: non-functional
+    subsystem: cross_cutting
+    title: "Lint + format gate (ruff format --check + ruff check)"
+    spec:
+      file: docs/decisions/0004-python-reaffirmed-after-mercury-survey.md
+      section: "Implementation guidance"
+    target:
+      metric: "ruff format --check . && ruff check ."
+      threshold: "0 violations"
+      measurement: "CI (Task #79 cites the command)"
+    types: []
+    tests: []
+    status: partial
+    notes: ""
+
+  - id: NFR-OBS-1
+    kind: non-functional
+    subsystem: orchestrator
+    title: "Every agent invocation emits AGENT_INVOKED + AGENT_SUCCEEDED|AGENT_FAILED with token + latency"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Cycle runtime: events (L102-L106); Artifact lineage (L79-L89)"
+    target:
+      metric: "EventLog has paired invoked/succeeded|failed entries per agent call"
+      threshold: "1:1 ratio (no lost events)"
+      measurement: "promote runner tests + add integration test (Task #89)"
+    types:
+      - src/caqrs/orchestrator/event_log.py::EventLog
+    tests: []
+    status: partial
+    notes: ""
+
+  - id: NFR-OBS-2
+    kind: non-functional
+    subsystem: orchestrator
+    title: "EventLog persists JSONL line-per-event; lossless reload via load_jsonl"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Cycle runtime: EventLog (L102-L106)"
+    target:
+      metric: "round-trip equality after load_jsonl"
+      threshold: "byte-for-byte equal sequence"
+      measurement: "test_load_jsonl_round_trips (already passes); promote to NFR doc"
+    types: []
+    tests: []
+    status: partial
+    notes: ""
+
+  - id: NFR-SCALE-1
+    kind: non-functional
+    subsystem: entities
+    title: "DuckDB store handles 1M MarketPoints / 100k Issuers without quadratic blowup"
+    spec:
+      file: docs/requirements/non-functional.md
+      section: "NFR-SCALE-1 placeholder"
+    target:
+      metric: "list_all_market_points + filings_for at 1M points / 100k issuers"
+      threshold: "TBD (Task #79)"
+      measurement: "perf bench (Task #89)"
+    types: []
+    tests: []
+    status: deferred
+    notes: ""
+
+  - id: NFR-COMPAT-1
+    kind: non-functional
+    subsystem: cross_cutting
+    title: "Python ≥ 3.12; pydantic v2 strict; httpx async"
+    spec:
+      file: docs/decisions/0004-python-reaffirmed-after-mercury-survey.md
+      section: "Decision (L22-L26)"
+    target:
+      metric: "pyproject.toml requires-python and dependencies"
+      threshold: "python ≥ 3.12, pydantic ≥ 2"
+      measurement: "uv lock + CI matrix"
+    types: []
+    tests: []
+    status: partial
+    notes: ""
+
+  - id: NFR-COMPAT-2
+    kind: non-functional
+    subsystem: data_edinetdb
+    title: "Cache TTLs match upstream change cadence (companies 7d / financials 30d / rankings 7d)"
+    spec:
+      file: src/caqrs/data/edinetdb/cache.py
+      section: "Module docstring (L8-L17)"
+    target:
+      metric: "DEFAULT_*_TTL_SECONDS constants"
+      threshold: "fixed by upstream cadence (L34-L36 of cache.py)"
+      measurement: "unit tests already pin defaults"
+    types:
+      - src/caqrs/data/edinetdb/cache.py
+    tests: []
+    status: partial
+    notes: ""
+
+  - id: NFR-COMPLY-1
+    kind: non-functional
+    subsystem: providers
+    title: "ToS-compliant credential reuse (Anthropic / OpenAI subscription posture)"
+    spec:
+      file: docs/decisions/0002-provider-strategy.md
+      section: "Compliance posture (L66-L75)"
+    target:
+      metric: "credential paths == {~/.claude, ~/.codex/sessions, macOS Keychain}"
+      threshold: "no OAuth-token extraction or browser-cookie scraping"
+      measurement: "manual audit + ADR check (Task #79)"
+    types: []
+    tests: []
+    status: partial
+    notes: "ADR-0002 records posture; NFR cataloguing in #79."
+
+  - id: NFR-COMPLY-2
+    kind: non-functional
+    subsystem: data_polymarket
+    title: "Public, unauthenticated API usage only; no impersonation of paying tier"
+    spec:
+      file: src/caqrs/data/polymarket/clob_client.py
+      section: "Module docstring (rate limit + auth note)"
+    target:
+      metric: "no auth headers / signed requests in CLOB / Gamma / Archive clients"
+      threshold: "0"
+      measurement: "code audit (Task #79)"
+    types: []
+    tests: []
+    status: tacit
+    notes: "Implicit in code; promote to NFR doc."
+
+  - id: NFR-COMPLY-3
+    kind: non-functional
+    subsystem: data_jquants
+    title: "Free-tier rate limit honored (5 req/min)"
+    spec:
+      file: src/caqrs/data/jquants/client.py
+      section: "_FREE_TIER_MIN_INTERVAL_SECONDS (L33)"
+    target:
+      metric: "AsyncRateLimiter min_interval_seconds default"
+      threshold: "12.0s"
+      measurement: "test_default_rate_limiter_min_interval_is_free_tier_pacing"
+    types: []
+    tests: []
+    status: partial
+    notes: ""
+
+  - id: NFR-COST-1
+    kind: non-functional
+    subsystem: providers
+    title: "LLM monthly token budget (subscription mode)"
+    spec:
+      file: docs/requirements/non-functional.md
+      section: "NFR-COST-1 placeholder"
+    target:
+      metric: "aggregate tokens consumed per calendar month per provider"
+      threshold: "TBD per subscription tier (Task #79)"
+      measurement: "EventLog rollup; future telemetry sink"
+    types: []
+    tests: []
+    status: deferred
+    notes: ""
+
+  - id: NFR-COST-2
+    kind: non-functional
+    subsystem: orchestrator
+    title: "Per-cycle token cap (CycleBudget) bounds runaway cost on a single research cycle"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Cycle runtime: BudgetGuard (L106-L112)"
+    target:
+      metric: "CycleBudget.token_cap"
+      threshold: "caller-provided per cycle"
+      measurement: "BudgetGuard unit tests"
+    types:
+      - src/caqrs/orchestrator/budget.py::CycleBudget
+    tests: []
+    status: partial
+    notes: ""
+
+  - id: NFR-AUDIT-1
+    kind: non-functional
+    subsystem: orchestrator
+    title: "RunMetadata lineage chain fully reconstructable from CycleStore + EventLog"
+    spec:
+      file: docs/ARCHITECTURE.md
+      section: "Artifact lineage (L79-L89)"
+    target:
+      metric: "every artifact's parent chain resolves to a root"
+      threshold: "no orphan parent_id"
+      measurement: "integration test (Task #89)"
+    types: []
+    tests: []
+    status: partial
+    notes: ""
+
+  - id: NFR-AUDIT-2
+    kind: non-functional
+    subsystem: entities
+    title: "Provenance.payload_hash is the canonical SHA-256 of the original upstream JSON response"
+    spec:
+      file: docs/research/data-integration/02-design-spec-tydd.md
+      section: "§A row 8 (L32); §C.4 Provenance (L186-L204)"
+    target:
+      metric: "hashlib.sha256(canonical_json(payload)).hexdigest() match"
+      threshold: "byte-for-byte"
+      measurement: "test_market_point_provenance_preserves_jquants_payload_hash"
+    types:
+      - src/caqrs/entities/types.py::Provenance
+    tests: []
+    status: partial
+    notes: ""
+
+  - id: NFR-PORT-1
+    kind: non-functional
+    subsystem: cross_cutting
+    title: "ESM-only / ASCII paths / no platform-specific syscalls in core code"
+    spec:
+      file: docs/requirements/non-functional.md
+      section: "NFR-PORT-1 placeholder"
+    target:
+      metric: "tests pass on Linux + macOS CI matrix"
+      threshold: "0 platform-specific failures"
+      measurement: "CI matrix (Task #79)"
+    types: []
+    tests: []
+    status: deferred
+    notes: ""
+
+  - id: NFR-PORT-2
+    kind: non-functional
+    subsystem: providers
+    title: "Keychain reader degrades to None on non-Darwin"
+    spec:
+      file: src/caqrs/providers/_cli_creds.py
+      section: "Keychain reader module"
+    target:
+      metric: "real_keychain_reader returns None on non-Darwin"
+      threshold: "always"
+      measurement: "test_real_keychain_reader_returns_none_on_non_darwin"
+    types:
+      - src/caqrs/providers/_cli_creds.py
+    tests: []
+    status: partial
+    notes: ""
+
+  - id: NFR-UX-1
+    kind: non-functional
+    subsystem: api
+    title: "OpenAPI schema includes core artifact schemas (ObserverInput, StrategyDecision, ...)"
+    spec:
+      file: tests/test_api_app_skeleton.py
+      section: "test_core_schemas_appear_in_openapi_components"
+    target:
+      metric: "openapi.json components.schemas covers core types"
+      threshold: "all public artifact schemas present"
+      measurement: "test_core_schemas_appear_in_openapi_components"
+    types: []
+    tests: []
+    status: partial
+    notes: ""
+
+  - id: NFR-UX-2
+    kind: non-functional
+    subsystem: providers
+    title: "AuthError message names exact renewal command (e.g. `claude login`)"
+    spec:
+      file: docs/decisions/0003-oauth-refresh-deferred.md
+      section: "Decision + Mitigation (L52-L75)"
+    target:
+      metric: "AuthError.message contains the literal renewal-command string"
+      threshold: "always present on pre-flight expiry"
+      measurement: "test_complete_raises_when_cred_expired (anthropic_cli + codex_cli)"
+    types:
+      - src/caqrs/providers/errors.py
+    tests: []
+    status: partial
+    notes: ""
