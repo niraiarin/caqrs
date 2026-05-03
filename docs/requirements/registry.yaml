@@ -22,7 +22,7 @@
 #   #80 -- @traces pytest marker + CI registry consistency check.
 #   #89 -- perf bench harness (turns NFR-PERF-* placeholders into gates).
 
-version: 6
+version: 7
 generated_at: "2026-05-02"
 
 requirements:
@@ -2759,10 +2759,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§A row ENT-RECON-A1"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t20_jquants_happy_path_three_rows, test_t21_edinetdb_happy_path_paginates_1200_rows]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-A2
     kind: functional
@@ -2771,10 +2776,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§A row ENT-RECON-A2"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t23_jquants_idempotent_rerun_reports_skipped_count]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-A3
     kind: functional
@@ -2783,10 +2793,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§A row ENT-RECON-A3"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t24_jquants_provenance_carries_source_fetched_at_payload_hash]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-A4
     kind: functional
@@ -2795,10 +2810,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§A row ENT-RECON-A4"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t25_jquants_identifier_conflict_collected_not_raised, test_p9_jquants_conflict_message_is_deterministic]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-A5
     kind: functional
@@ -2807,10 +2827,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§A row ENT-RECON-A5"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t26_jquants_dry_run_does_not_mutate_store]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-A6
     kind: functional
@@ -2819,10 +2844,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§A row ENT-RECON-A6"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t20_jquants_happy_path_three_rows, test_t21_edinetdb_happy_path_paginates_1200_rows, test_t27_jquants_row_emits_exactly_jquants_code_and_sec_code, test_t28_edinetdb_row_emits_edinet_jcn_and_sec, test_t29_edinetdb_partial_record_emits_only_edinet_code]
+    status: formalized
+    notes: ""
 
   # --- ENT-RECON example tests (T20..T30) ---
 
@@ -2833,10 +2863,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§B test list ENT-RECON-T20"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t20_jquants_happy_path_three_rows]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-T21
     kind: functional
@@ -2845,10 +2880,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§B test list ENT-RECON-T21"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t21_edinetdb_happy_path_paginates_1200_rows]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-T22
     kind: functional
@@ -2857,10 +2897,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§B test list ENT-RECON-T22"
-    types: []
-    tests: []
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t22_gleif_lei_loader_placeholder]
     status: deferred
-    notes: "Phase E3 placeholder; real implementation deferred to Phase E5"
+    notes: "Phase E5 GLEIF LEI loader; placeholder xfail in tests/test_entities_reconciliation.py"
 
   - id: ENT-RECON-T23
     kind: functional
@@ -2869,10 +2914,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§B test list ENT-RECON-T23"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t23_jquants_idempotent_rerun_reports_skipped_count]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-T24
     kind: functional
@@ -2881,10 +2931,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§B test list ENT-RECON-T24"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t24_jquants_provenance_carries_source_fetched_at_payload_hash]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-T25
     kind: functional
@@ -2893,10 +2948,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§B test list ENT-RECON-T25"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t25_jquants_identifier_conflict_collected_not_raised]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-T26
     kind: functional
@@ -2905,10 +2965,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§B test list ENT-RECON-T26"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t26_jquants_dry_run_does_not_mutate_store]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-T27
     kind: functional
@@ -2917,10 +2982,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§B test list ENT-RECON-T27"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t27_jquants_row_emits_exactly_jquants_code_and_sec_code]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-T28
     kind: functional
@@ -2929,10 +2999,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§B test list ENT-RECON-T28"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t28_edinetdb_row_emits_edinet_jcn_and_sec]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-T29
     kind: functional
@@ -2941,10 +3016,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§B test list ENT-RECON-T29"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 implementation pending #85; partial-data scenario"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t29_edinetdb_partial_record_emits_only_edinet_code]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-T30
     kind: functional
@@ -2953,10 +3033,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§B test list ENT-RECON-T30"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_t30_edinetdb_walks_three_pages_of_500]
+    status: formalized
+    notes: ""
 
   # --- ENT-RECON property tests (P6..P9) ---
 
@@ -2967,10 +3052,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§B property ENT-RECON-P6"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 Hypothesis-driven; implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_p6_jquants_idempotency_under_repeated_runs]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-P7
     kind: functional
@@ -2979,10 +3069,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§B property ENT-RECON-P7"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 Hypothesis-driven; implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_p7_jquants_source_order_independence]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-P8
     kind: functional
@@ -2991,10 +3086,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§B property ENT-RECON-P8"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 Hypothesis-driven; implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_p8_jquants_no_silent_merges_for_disjoint_runs]
+    status: formalized
+    notes: ""
 
   - id: ENT-RECON-P9
     kind: functional
@@ -3003,10 +3103,15 @@ requirements:
     spec:
       file: docs/research/data-integration/03-phase-e3-reconciliation.md
       section: "§B property ENT-RECON-P9"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3 Hypothesis-driven; implementation pending #85"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names: [test_p9_jquants_conflict_message_is_deterministic]
+    status: formalized
+    notes: ""
   # LIVE-BROKER SAFETY (P4 prerequisite). Spec at
   # docs/decisions/0008-live-broker-safety.md. All deferred until P4
   # implementation lands; Task #87 contract test suite fills tests[].

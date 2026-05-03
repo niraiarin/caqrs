@@ -36,6 +36,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from pydantic_core import to_json
 
+from caqrs.data._common.rate_limit import AsyncRateLimiter
 from caqrs.data.edinetdb.client import EdinetDbClient
 from caqrs.data.jquants.client import JQuantsClient
 from caqrs.entities import (
@@ -62,6 +63,20 @@ _HYPOTHESIS_SETTINGS = settings(
     deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
+
+
+def _fast_jq_client() -> JQuantsClient:
+    """JQuantsClient with min_interval=0 for test runs.
+
+    The default 12-s pacing is fine for live calls but turns property
+    tests into hour-long affairs. Respx satisfies requests in-process,
+    so a zero-interval rate limiter has no semantic effect.
+    """
+    return JQuantsClient(
+        api_key=_JQ_KEY,
+        rate_limiter=AsyncRateLimiter(min_interval_seconds=0.0),
+    )
+
 
 # === Fixture builders ===
 
@@ -109,15 +124,21 @@ def _edb_page(
 
 
 def _async_run(coro: Any) -> Any:
-    """Run an async coroutine inside a Hypothesis sync test."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Run an async coroutine inside a Hypothesis sync test.
+
+    Hypothesis tests are sync; we drive each generated example through
+    a fresh event loop via ``asyncio.run``. This sidesteps the
+    pytest-asyncio session loop (which is held by `asyncio_mode = auto`
+    for the async tests in this file) and avoids the
+    ``get_event_loop`` deprecation under Python 3.12.
+    """
+    return asyncio.run(coro)
 
 
 # === T20 — J-Quants happy path ===
 
 
 @pytest.mark.traces("ENT-RECON-T20", "ENT-RECON-A1", "ENT-RECON-A6")
-@pytest.mark.xfail(strict=True, reason="impl pending — ADR-0006 step 1 (Task #85)")
 @respx.mock
 async def test_t20_jquants_happy_path_three_rows() -> None:
     """T20: A fresh InMemoryEntityStore + a J-Quants stub yielding three
@@ -139,10 +160,13 @@ async def test_t20_jquants_happy_path_three_rows() -> None:
     )
 
     store = InMemoryEntityStore()
-    async with JQuantsClient(api_key=_JQ_KEY) as client:
+    async with _fast_jq_client() as client:
         result = await reconcile_from_jquants_master(client=client, store=store)
 
-    assert result == ReconcilerResult(upserted=3, skipped=0, conflicts=(), dry_run=False)
+    assert result.upserted == 3
+    assert result.skipped == 0
+    assert result.conflicts == ()
+    assert result.dry_run is False
 
     toyota = store.lookup_issuer(kind=IdentifierKind.JQUANTS_CODE, value="72030")
     sony = store.lookup_issuer(kind=IdentifierKind.JQUANTS_CODE, value="67580")
@@ -165,7 +189,6 @@ async def test_t20_jquants_happy_path_three_rows() -> None:
 
 
 @pytest.mark.traces("ENT-RECON-T21", "ENT-RECON-A1", "ENT-RECON-A6")
-@pytest.mark.xfail(strict=True, reason="impl pending — ADR-0006 step 1 (Task #85)")
 @respx.mock
 async def test_t21_edinetdb_happy_path_paginates_1200_rows() -> None:
     """T21: An EDINET DB stub paginating 1200 rows over 3 pages of 500
@@ -200,7 +223,10 @@ async def test_t21_edinetdb_happy_path_paginates_1200_rows() -> None:
     async with EdinetDbClient(api_key=_EDB_KEY) as client:
         result = await reconcile_from_edinetdb_companies(client=client, store=store)
 
-    assert result == ReconcilerResult(upserted=1200, skipped=0, conflicts=(), dry_run=False)
+    assert result.upserted == 1200
+    assert result.skipped == 0
+    assert result.conflicts == ()
+    assert result.dry_run is False
     # Every row produced an EDINET_CODE; JCN-bearing rows produced JCN identifiers.
     assert store.lookup_issuer(kind=IdentifierKind.EDINET_CODE, value="E00000") is not None
     assert store.lookup_issuer(kind=IdentifierKind.EDINET_CODE, value="E01199") is not None
@@ -235,7 +261,6 @@ def test_t22_gleif_lei_loader_placeholder() -> None:
 
 
 @pytest.mark.traces("ENT-RECON-T23", "ENT-RECON-A2")
-@pytest.mark.xfail(strict=True, reason="impl pending — ADR-0006 step 1 (Task #85)")
 @respx.mock
 async def test_t23_jquants_idempotent_rerun_reports_skipped_count() -> None:
     """T23: A store already populated by one J-Quants run; a second call
@@ -251,7 +276,7 @@ async def test_t23_jquants_idempotent_rerun_reports_skipped_count() -> None:
     )
 
     store = InMemoryEntityStore()
-    async with JQuantsClient(api_key=_JQ_KEY) as client:
+    async with _fast_jq_client() as client:
         first = await reconcile_from_jquants_master(client=client, store=store)
         snapshot_before = _snapshot_issuers(store)
         second = await reconcile_from_jquants_master(client=client, store=store)
@@ -268,7 +293,6 @@ async def test_t23_jquants_idempotent_rerun_reports_skipped_count() -> None:
 
 
 @pytest.mark.traces("ENT-RECON-T24", "ENT-RECON-A3")
-@pytest.mark.xfail(strict=True, reason="impl pending — ADR-0006 step 1 (Task #85)")
 @respx.mock
 async def test_t24_jquants_provenance_carries_source_fetched_at_payload_hash() -> None:
     """T24: A J-Quants stub with a single row; the per-record provenance
@@ -287,7 +311,7 @@ async def test_t24_jquants_provenance_carries_source_fetched_at_payload_hash() -
     )
 
     store = InMemoryEntityStore()
-    async with JQuantsClient(api_key=_JQ_KEY) as client:
+    async with _fast_jq_client() as client:
         result = await reconcile_from_jquants_master(client=client, store=store)
 
     assert result.upserted == 1
@@ -303,7 +327,6 @@ async def test_t24_jquants_provenance_carries_source_fetched_at_payload_hash() -
 
 
 @pytest.mark.traces("ENT-RECON-T25", "ENT-RECON-A4")
-@pytest.mark.xfail(strict=True, reason="impl pending — ADR-0006 step 1 (Task #85)")
 @respx.mock
 async def test_t25_jquants_identifier_conflict_collected_not_raised() -> None:
     """T25: Store pre-populated with Issuer X owning (JQUANTS_CODE,
@@ -332,7 +355,7 @@ async def test_t25_jquants_identifier_conflict_collected_not_raised() -> None:
         ),
     )
 
-    async with JQuantsClient(api_key=_JQ_KEY) as client:
+    async with _fast_jq_client() as client:
         result = await reconcile_from_jquants_master(client=client, store=store)
 
     assert result.upserted == 0
@@ -352,7 +375,6 @@ async def test_t25_jquants_identifier_conflict_collected_not_raised() -> None:
 
 
 @pytest.mark.traces("ENT-RECON-T26", "ENT-RECON-A5")
-@pytest.mark.xfail(strict=True, reason="impl pending — ADR-0006 step 1 (Task #85)")
 @respx.mock
 async def test_t26_jquants_dry_run_does_not_mutate_store() -> None:
     """T26: A fresh store + the three-row J-Quants stub from T20 with
@@ -368,10 +390,16 @@ async def test_t26_jquants_dry_run_does_not_mutate_store() -> None:
     )
 
     store = InMemoryEntityStore()
-    async with JQuantsClient(api_key=_JQ_KEY) as client:
+    async with _fast_jq_client() as client:
         result = await reconcile_from_jquants_master(client=client, store=store, dry_run=True)
 
-    assert result == ReconcilerResult(upserted=3, skipped=0, conflicts=(), dry_run=True)
+    # Dry-run: provenance log is empty (nothing was committed) and the
+    # other fields match the planned-upsert summary.
+    assert result.upserted == 3
+    assert result.skipped == 0
+    assert result.conflicts == ()
+    assert result.dry_run is True
+    assert result.provenance == ()
     # Store is byte-for-byte unchanged: lookup misses on every input id.
     assert store.lookup_issuer(kind=IdentifierKind.JQUANTS_CODE, value="72030") is None
     assert store.lookup_issuer(kind=IdentifierKind.JQUANTS_CODE, value="67580") is None
@@ -382,7 +410,6 @@ async def test_t26_jquants_dry_run_does_not_mutate_store() -> None:
 
 
 @pytest.mark.traces("ENT-RECON-T27", "ENT-RECON-A6")
-@pytest.mark.xfail(strict=True, reason="impl pending — ADR-0006 step 1 (Task #85)")
 @respx.mock
 async def test_t27_jquants_row_emits_exactly_jquants_code_and_sec_code() -> None:
     """T27: A J-Quants stub with a single row Code=72030; the persisted
@@ -397,7 +424,7 @@ async def test_t27_jquants_row_emits_exactly_jquants_code_and_sec_code() -> None
     )
 
     store = InMemoryEntityStore()
-    async with JQuantsClient(api_key=_JQ_KEY) as client:
+    async with _fast_jq_client() as client:
         await reconcile_from_jquants_master(client=client, store=store)
 
     issuer = store.lookup_issuer(kind=IdentifierKind.JQUANTS_CODE, value="72030")
@@ -412,7 +439,6 @@ async def test_t27_jquants_row_emits_exactly_jquants_code_and_sec_code() -> None
 
 
 @pytest.mark.traces("ENT-RECON-T28", "ENT-RECON-A6")
-@pytest.mark.xfail(strict=True, reason="impl pending — ADR-0006 step 1 (Task #85)")
 @respx.mock
 async def test_t28_edinetdb_row_emits_edinet_jcn_and_sec() -> None:
     """T28: An EDINET DB row with edinet_code="E02144", jcn="1180301018771",
@@ -450,7 +476,6 @@ async def test_t28_edinetdb_row_emits_edinet_jcn_and_sec() -> None:
 
 
 @pytest.mark.traces("ENT-RECON-T29", "ENT-RECON-A6")
-@pytest.mark.xfail(strict=True, reason="impl pending — ADR-0006 step 1 (Task #85)")
 @respx.mock
 async def test_t29_edinetdb_partial_record_emits_only_edinet_code() -> None:
     """T29: An EDINET DB row with only edinet_code="E12345" (jcn,
@@ -482,7 +507,6 @@ async def test_t29_edinetdb_partial_record_emits_only_edinet_code() -> None:
 
 
 @pytest.mark.traces("ENT-RECON-T30")
-@pytest.mark.xfail(strict=True, reason="impl pending — ADR-0006 step 1 (Task #85)")
 @respx.mock
 async def test_t30_edinetdb_walks_three_pages_of_500() -> None:
     """T30: An EDINET DB stub paginating 1500 rows over 3 pages of 500;
@@ -519,9 +543,19 @@ async def test_t30_edinetdb_walks_three_pages_of_500() -> None:
 
 
 def _hypothesis_jq_codes() -> st.SearchStrategy[list[str]]:
-    """Distinct 5-digit J-Quants codes."""
+    """Distinct 5-digit J-Quants codes whose derived 4-digit SEC_CODE
+    (the first 4 chars) is also unique within the list.
+
+    The loader emits a (SEC_CODE, code[:-1]) identifier per row;
+    two J-Quants codes that differ only in the trailing check digit
+    (e.g. 10000 / 10001) share a SEC_CODE and would conflict on the
+    second insert. Live J-Quants data does not produce that collision
+    (the check digit is deterministic from the SEC_CODE), so the
+    property tests filter to a generator that mirrors the live
+    invariant.
+    """
     return st.lists(
-        st.integers(min_value=10000, max_value=99999).map(lambda i: f"{i:05d}"),
+        st.integers(min_value=1000, max_value=9999).map(lambda i: f"{i:04d}0"),
         min_size=1,
         max_size=10,
         unique=True,
@@ -529,7 +563,6 @@ def _hypothesis_jq_codes() -> st.SearchStrategy[list[str]]:
 
 
 @pytest.mark.traces("ENT-RECON-P6", "ENT-RECON-A2")
-@pytest.mark.xfail(strict=True, reason="impl pending — ADR-0006 step 1 (Task #85)")
 @_HYPOTHESIS_SETTINGS
 @given(codes=_hypothesis_jq_codes())
 def test_p6_jquants_idempotency_under_repeated_runs(codes: list[str]) -> None:
@@ -540,25 +573,27 @@ def test_p6_jquants_idempotency_under_repeated_runs(codes: list[str]) -> None:
     rows = [_jq_row(code=code, company_name=f"Issuer {code}") for code in codes]
 
     async def _scenario() -> tuple[dict[str, Any], dict[str, Any]]:
-        with respx.mock(base_url=_JQ_BASE):
-            respx.get(f"{_JQ_BASE}/equities/master").mock(
+        with respx.mock() as router:
+            router.get(f"{_JQ_BASE}/equities/master").mock(
                 return_value=httpx.Response(200, json={"data": rows}),
             )
 
             once = InMemoryEntityStore()
             twice = InMemoryEntityStore()
-            async with JQuantsClient(api_key=_JQ_KEY) as client:
+            async with _fast_jq_client() as client:
                 await reconcile_from_jquants_master(client=client, store=once)
                 await reconcile_from_jquants_master(client=client, store=twice)
                 await reconcile_from_jquants_master(client=client, store=twice)
             return _snapshot_issuers(once), _snapshot_issuers(twice)
 
     once_state, twice_state = _async_run(_scenario())
-    assert once_state == twice_state
+    # Compare on (display_name, identifier-set) keys — IssuerId is
+    # randomly minted per run, but the per-Issuer content is the
+    # property under test.
+    assert _key_set(once_state) == _key_set(twice_state)
 
 
 @pytest.mark.traces("ENT-RECON-P7")
-@pytest.mark.xfail(strict=True, reason="impl pending — ADR-0006 step 1 (Task #85)")
 @_HYPOTHESIS_SETTINGS
 @given(codes=_hypothesis_jq_codes(), seed=st.integers(min_value=0, max_value=2**31 - 1))
 def test_p7_jquants_source_order_independence(codes: list[str], seed: int) -> None:
@@ -575,20 +610,20 @@ def test_p7_jquants_source_order_independence(codes: list[str], seed: int) -> No
         rows_a = [_jq_row(code=code, company_name=f"Issuer {code}") for code in codes]
         rows_b = [_jq_row(code=code, company_name=f"Issuer {code}") for code in permuted]
 
-        with respx.mock(base_url=_JQ_BASE):
-            respx.get(f"{_JQ_BASE}/equities/master").mock(
+        with respx.mock() as router:
+            router.get(f"{_JQ_BASE}/equities/master").mock(
                 return_value=httpx.Response(200, json={"data": rows_a}),
             )
             store_a = InMemoryEntityStore()
-            async with JQuantsClient(api_key=_JQ_KEY) as client_a:
+            async with _fast_jq_client() as client_a:
                 await reconcile_from_jquants_master(client=client_a, store=store_a)
 
-        with respx.mock(base_url=_JQ_BASE):
-            respx.get(f"{_JQ_BASE}/equities/master").mock(
+        with respx.mock() as router:
+            router.get(f"{_JQ_BASE}/equities/master").mock(
                 return_value=httpx.Response(200, json={"data": rows_b}),
             )
             store_b = InMemoryEntityStore()
-            async with JQuantsClient(api_key=_JQ_KEY) as client_b:
+            async with _fast_jq_client() as client_b:
                 await reconcile_from_jquants_master(client=client_b, store=store_b)
 
         return _snapshot_issuers(store_a), _snapshot_issuers(store_b)
@@ -598,15 +633,28 @@ def test_p7_jquants_source_order_independence(codes: list[str], seed: int) -> No
 
 
 @pytest.mark.traces("ENT-RECON-P8")
-@pytest.mark.xfail(strict=True, reason="impl pending — ADR-0006 step 1 (Task #85)")
 @_HYPOTHESIS_SETTINGS
 @given(left=_hypothesis_jq_codes(), right=_hypothesis_jq_codes())
 def test_p8_jquants_no_silent_merges_for_disjoint_runs(left: list[str], right: list[str]) -> None:
     """P8: For two record lists R1, R2 with disjoint identifier sets,
     running on R1 then R2 yields the same store state (set-equal on
-    (display_name, identifier-set) keys) as running on R2 then R1."""
-    disjoint_left = [code for code in left if code not in set(right)]
-    disjoint_right = [code for code in right if code not in set(left)]
+    (display_name, identifier-set) keys) as running on R2 then R1.
+
+    Disjointness must include the *derived* SEC_CODE (the 4-digit
+    prefix of the 5-digit J-Quants code), since the loader emits a
+    SEC_CODE identifier per row and an overlap there would trigger a
+    conflict-flagged merge — which is the very thing P8 is checking
+    is absent.
+    """
+    # Disjointness on both raw JQUANTS_CODE and derived SEC_CODE.
+    left_keys = set(left) | {code[:-1] for code in left}
+    right_keys = set(right) | {code[:-1] for code in right}
+    disjoint_left = [
+        code for code in left if code not in right_keys and code[:-1] not in right_keys
+    ]
+    disjoint_right = [
+        code for code in right if code not in left_keys and code[:-1] not in left_keys
+    ]
 
     if not disjoint_left and not disjoint_right:
         return  # vacuously true
@@ -616,25 +664,25 @@ def test_p8_jquants_no_silent_merges_for_disjoint_runs(left: list[str], right: l
         rows_r = [_jq_row(code=c, company_name=f"R {c}") for c in disjoint_right]
 
         # left then right
-        with respx.mock(base_url=_JQ_BASE):
-            route = respx.get(f"{_JQ_BASE}/equities/master")
+        with respx.mock() as router:
+            route = router.get(f"{_JQ_BASE}/equities/master")
             route.mock(return_value=httpx.Response(200, json={"data": rows_l}))
             store_lr = InMemoryEntityStore()
-            async with JQuantsClient(api_key=_JQ_KEY) as client:
+            async with _fast_jq_client() as client:
                 await reconcile_from_jquants_master(client=client, store=store_lr)
             route.mock(return_value=httpx.Response(200, json={"data": rows_r}))
-            async with JQuantsClient(api_key=_JQ_KEY) as client:
+            async with _fast_jq_client() as client:
                 await reconcile_from_jquants_master(client=client, store=store_lr)
 
         # right then left
-        with respx.mock(base_url=_JQ_BASE):
-            route = respx.get(f"{_JQ_BASE}/equities/master")
+        with respx.mock() as router:
+            route = router.get(f"{_JQ_BASE}/equities/master")
             route.mock(return_value=httpx.Response(200, json={"data": rows_r}))
             store_rl = InMemoryEntityStore()
-            async with JQuantsClient(api_key=_JQ_KEY) as client:
+            async with _fast_jq_client() as client:
                 await reconcile_from_jquants_master(client=client, store=store_rl)
             route.mock(return_value=httpx.Response(200, json={"data": rows_l}))
-            async with JQuantsClient(api_key=_JQ_KEY) as client:
+            async with _fast_jq_client() as client:
                 await reconcile_from_jquants_master(client=client, store=store_rl)
 
         return _snapshot_issuers(store_lr), _snapshot_issuers(store_rl)
@@ -644,9 +692,8 @@ def test_p8_jquants_no_silent_merges_for_disjoint_runs(left: list[str], right: l
 
 
 @pytest.mark.traces("ENT-RECON-P9", "ENT-RECON-A4")
-@pytest.mark.xfail(strict=True, reason="impl pending — ADR-0006 step 1 (Task #85)")
 @_HYPOTHESIS_SETTINGS
-@given(code=st.integers(min_value=10000, max_value=99999).map(lambda i: f"{i:05d}"))
+@given(code=st.integers(min_value=1000, max_value=9999).map(lambda i: f"{i:04d}0"))
 def test_p9_jquants_conflict_message_is_deterministic(code: str) -> None:
     """P9: For any record r that conflicts with an existing identifier,
     running the loader on r twice yields the same conflicts tuple
@@ -663,8 +710,8 @@ def test_p9_jquants_conflict_message_is_deterministic(code: str) -> None:
 
         rows = [_jq_row(code=code, company_name="Conflicting")]
 
-        with respx.mock(base_url=_JQ_BASE):
-            respx.get(f"{_JQ_BASE}/equities/master").mock(
+        with respx.mock() as router:
+            router.get(f"{_JQ_BASE}/equities/master").mock(
                 return_value=httpx.Response(200, json={"data": rows}),
             )
             store_a = InMemoryEntityStore()
@@ -672,7 +719,7 @@ def test_p9_jquants_conflict_message_is_deterministic(code: str) -> None:
             store_b = InMemoryEntityStore()
             store_b.upsert_issuer(issuer=existing)
 
-            async with JQuantsClient(api_key=_JQ_KEY) as client:
+            async with _fast_jq_client() as client:
                 result_a = await reconcile_from_jquants_master(client=client, store=store_a)
                 result_b = await reconcile_from_jquants_master(client=client, store=store_b)
 
