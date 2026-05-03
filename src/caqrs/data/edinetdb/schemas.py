@@ -34,6 +34,11 @@ class EdinetDbCompany(StrictBaseModel):
 
     edinet_code: str = Field(min_length=1, max_length=20)
     sec_code: str | None = None
+    # JCN (Japan Corporate Number, 13-digit) is optional on the upstream
+    # response. Phase E3 reconcile_from_edinetdb_companies populates an
+    # `(IdentifierKind.JCN, ...)` identifier when the field is present;
+    # absence is the common case for funds / SPCs (see ENT-RECON-T29).
+    jcn: str | None = None
     name: str
     name_en: str | None = None
     name_ja: str
