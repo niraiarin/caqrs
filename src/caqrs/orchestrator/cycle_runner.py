@@ -49,6 +49,7 @@ from caqrs.agents.auditor import AuditorInput
 from caqrs.agents.decider import DeciderInput
 from caqrs.agents.protocol import Agent, AgentResult
 from caqrs.agents.research import ResearchInput
+from caqrs.entities.resolver import EntityResolver
 from caqrs.execution.execution_report import ExecutionReport
 from caqrs.execution.protocol import BrokerProtocol
 from caqrs.orchestrator.budget import (
@@ -67,6 +68,7 @@ from caqrs.orchestrator.events import (
     cycle_aborted_event,
     cycle_completed_event,
     cycle_started_event,
+    identifier_resolved_event,
     policy_gateway_applied_event,
     state_transition_event,
 )
@@ -227,6 +229,7 @@ class CycleRunner:
         policy_gateway_config: PolicyGatewayConfig | None = None,
         broker: BrokerProtocol | None = None,
         price_provider: PriceProvider | None = None,
+        entity_resolver: EntityResolver | None = None,
     ) -> None:
         self._observer = observer
         self._hypothesis = hypothesis
@@ -242,8 +245,9 @@ class CycleRunner:
         self._policy_gateway_config = policy_gateway_config
         self._broker = broker
         self._price_provider = price_provider
+        self._entity_resolver = entity_resolver
 
-    async def run(self, observer_input: ObserverInput) -> CycleResult:  # noqa: PLR0911
+    async def run(self, observer_input: ObserverInput) -> CycleResult:  # noqa: PLR0911, PLR0912
         # Each early-return is a deliberate fail-fast at a phase boundary
         # (observer / hypothesis / skeptic / research / backtest / auditor).
         # Collapsing them into a loop would obscure the typed contract that
@@ -266,6 +270,26 @@ class CycleRunner:
 
         self._event_log.append(cycle_started_event(cycle_id=cycle_id))
         ctx.machine.transition(OrchestratorState.OBSERVING)
+
+        # === Phase E4 EntityResolver hook ===
+        # Fires before Observer so identifier-resolution events appear
+        # earlier than the observer agent's invocation events. The
+        # resolver is read-only against observer_input; it never
+        # mutates the universe or any other field.
+        if self._entity_resolver is not None:
+            for resolution in self._entity_resolver(observer_input):
+                self._event_log.append(
+                    identifier_resolved_event(
+                        cycle_id=cycle_id,
+                        input_ticker=resolution.input_ticker,
+                        canonical_issuer_id=resolution.canonical_issuer_id,
+                        matched_kind=(
+                            resolution.matched_kind.value
+                            if resolution.matched_kind is not None
+                            else None
+                        ),
+                    ),
+                )
 
         # === Observer ===
         observer_outcome = await self._call_agent(

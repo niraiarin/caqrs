@@ -22,8 +22,8 @@
 #   #80 -- @traces pytest marker + CI registry consistency check.
 #   #89 -- perf bench harness (turns NFR-PERF-* placeholders into gates).
 
-version: 8
-generated_at: "2026-05-02"
+version: 9
+generated_at: "2026-05-09"
 requirements:
   # =====================================================================
   # ENTITIES (Phase E1 + E2): canonical issuer / market series / filings /
@@ -529,12 +529,22 @@ requirements:
     subsystem: entities
     title: "Reconciliation seed loaders for J-Quants / EDINET DB / GLEIF (Phase E3)"
     spec:
-      file: docs/research/data-integration/02-design-spec-tydd.md
-      section: "§E3 (L433-L443)"
-    types: []
-    tests: []
-    status: deferred
-    notes: "Phase E3; not yet implemented. JCN ↔ EDINET-code conflicts noted in §G."
+      file: docs/research/data-integration/03-phase-e3-reconciliation.md
+      section: "§A acceptance criteria (umbrella for ENT-RECON-A1..A6)"
+    types:
+      - src/caqrs/entities/reconciliation.py::ReconcilerResult
+      - src/caqrs/entities/reconciliation.py::reconcile_from_jquants_master
+      - src/caqrs/entities/reconciliation.py::reconcile_from_edinetdb_companies
+    tests:
+      - path: tests/test_entities_reconciliation.py
+        names:
+          - test_t20_jquants_happy_path_three_rows
+          - test_t21_edinetdb_happy_path_paginates_1200_rows
+          - test_t23_jquants_idempotent_rerun_reports_skipped_count
+          - test_t24_jquants_provenance_carries_source_fetched_at_payload_hash
+          - test_t25_jquants_identifier_conflict_collected_not_raised
+    status: formalized
+    notes: "Phase E3 implementation landed in PR #86. GLEIF LEI loader (ENT-RECON-T22) deferred to Phase E5. JCN ↔ EDINET-code conflicts surface via IdentifierConflictError per ENT-RECON-A4."
   - id: ENT-CYCLE-INTEGRATION-1
     kind: functional
     subsystem: entities

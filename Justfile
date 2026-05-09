@@ -25,6 +25,10 @@ traceability:
 tos:
     python scripts/check_data_source_tos.py
 
+# Verify NFR-LIVE-BROKER-2 credential isolation across the import graph
+lint-creds:
+    uv run --frozen python scripts/check_credential_isolation.py
+
 # === Tests ===
 test:
     uv run pytest
@@ -39,7 +43,7 @@ perf:
     uv run pytest -m perf --benchmark-only --benchmark-disable-gc
 
 # === Aggregate ===
-ci: fmt-check lint typecheck traceability tos test
+ci: fmt-check lint typecheck traceability tos lint-creds test
     @echo "All CI checks passed."
 
 # === Local dev ===
