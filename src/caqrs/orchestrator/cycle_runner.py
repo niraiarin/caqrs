@@ -49,6 +49,7 @@ from caqrs.agents.auditor import AuditorInput
 from caqrs.agents.decider import DeciderInput
 from caqrs.agents.protocol import Agent, AgentResult
 from caqrs.agents.research import ResearchInput
+from caqrs.entities.resolver import EntityResolver
 from caqrs.execution.execution_report import ExecutionReport
 from caqrs.execution.protocol import BrokerProtocol
 from caqrs.orchestrator.budget import (
@@ -227,6 +228,7 @@ class CycleRunner:
         policy_gateway_config: PolicyGatewayConfig | None = None,
         broker: BrokerProtocol | None = None,
         price_provider: PriceProvider | None = None,
+        entity_resolver: EntityResolver | None = None,
     ) -> None:
         self._observer = observer
         self._hypothesis = hypothesis
@@ -242,6 +244,7 @@ class CycleRunner:
         self._policy_gateway_config = policy_gateway_config
         self._broker = broker
         self._price_provider = price_provider
+        self._entity_resolver = entity_resolver
 
     async def run(self, observer_input: ObserverInput) -> CycleResult:  # noqa: PLR0911
         # Each early-return is a deliberate fail-fast at a phase boundary
