@@ -29,6 +29,10 @@ tos:
 lint-creds:
     uv run --frozen python scripts/check_credential_isolation.py
 
+# Pre-merge checklist: diff stats, ADR-0007 trigger detection, verifier-report presence
+verify pr_number="":
+    uv run --frozen python scripts/verify.py {{ if pr_number == "" { "" } else { "--pr-number " + pr_number } }}
+
 # === Tests ===
 test:
     uv run pytest
