@@ -47,6 +47,9 @@ jobs:
       - name: Check data-source TOS coverage
         run: python scripts/check_data_source_tos.py
 
+      - name: Check credential isolation (NFR-LIVE-BROKER-2)
+        run: uv run --frozen python scripts/check_credential_isolation.py
+
       - name: Test
         run: uv run pytest --cov=caqrs --cov-report=xml
 

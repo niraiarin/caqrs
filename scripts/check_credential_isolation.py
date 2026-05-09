@@ -21,12 +21,42 @@ audit function and formats the report.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+
+from caqrs.lint.credential_isolation import (
+    DEFAULT_BOUNDARIES,
+    audit_credential_isolation,
+)
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_SRC_ROOT = _REPO_ROOT / "src"
 
 
 def main() -> int:
-    raise NotImplementedError(
-        "Task #88 step 1 placeholder; CLI wiring impl in step 2",
+    violations = audit_credential_isolation(
+        src_root=_SRC_ROOT,
+        boundaries=DEFAULT_BOUNDARIES,
     )
+    if not violations:
+        print(
+            f"OK  no credential-isolation violations across "
+            f"{len(DEFAULT_BOUNDARIES)} boundary(ies).",
+        )
+        return 0
+    for v in violations:
+        chain = " -> ".join(v.import_path)
+        print(
+            f"FAIL  {v.boundary} reaches forbidden env "
+            f"{v.env_var!r} (prefix {v.forbidden_prefix!r}) "
+            f"via {chain} (site: {v.site_module})",
+            file=sys.stderr,
+        )
+    print(
+        f"FAIL  {len(violations)} credential-isolation violation(s) "
+        "— see ADR-0008 §NFR-LIVE-BROKER-2",
+        file=sys.stderr,
+    )
+    return 1
 
 
 if __name__ == "__main__":

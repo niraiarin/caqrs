@@ -36,8 +36,6 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
-import pytest
-
 from caqrs.lint.credential_isolation import (
     CredentialBoundary,
     audit_credential_isolation,
@@ -65,7 +63,6 @@ def _write_module(root: Path, dotted: str, body: str) -> None:
 # --- regression guard on the real codebase -------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #88")
 def test_real_codebase_passes_default_paper_broker_boundary() -> None:
     """Regression guard: today's ``src/caqrs/`` exposes no ``LIVE_BROKER_*``
     leak from PaperBroker (LiveBroker doesn't exist yet), so the audit
@@ -86,7 +83,6 @@ def test_real_codebase_passes_default_paper_broker_boundary() -> None:
 # --- direct-case violations ----------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #88")
 def test_direct_literal_env_read_violates(tmp_path: Path) -> None:
     """A boundary module that itself reads ``os.environ["LIVE_BROKER_API_KEY"]``
     must produce one violation with ``import_path == (boundary,)``."""
@@ -109,7 +105,6 @@ def test_direct_literal_env_read_violates(tmp_path: Path) -> None:
     assert v.import_path == ("pkg.broker",)
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #88")
 def test_kwarg_default_env_read_violates(tmp_path: Path) -> None:
     """The existing ``from_env(env_var="EDINET_API_KEY")`` pattern in
     ``caqrs.data.edinet.client`` reads via a kwarg default — a string
@@ -135,7 +130,6 @@ def test_kwarg_default_env_read_violates(tmp_path: Path) -> None:
 # --- transitive-case violations ------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #88")
 def test_transitive_import_chain_is_reported(tmp_path: Path) -> None:
     """Boundary imports helper which reads forbidden env. Violation's
     ``import_path`` MUST include the full chain ``(boundary, helper)``
@@ -164,7 +158,6 @@ def test_transitive_import_chain_is_reported(tmp_path: Path) -> None:
     assert v.import_path == ("pkg.broker", "pkg.helper")
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #88")
 def test_violation_includes_full_import_chain_for_multi_hop(
     tmp_path: Path,
 ) -> None:
@@ -194,7 +187,6 @@ def test_violation_includes_full_import_chain_for_multi_hop(
 # --- non-matching cases (no false positives) -----------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #88")
 def test_unrelated_env_var_is_not_reported(tmp_path: Path) -> None:
     """A boundary that reads a perfectly-unrelated env var (no
     forbidden-prefix match) MUST not produce a violation."""
@@ -211,7 +203,6 @@ def test_unrelated_env_var_is_not_reported(tmp_path: Path) -> None:
     assert violations == ()
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #88")
 def test_module_outside_boundary_subgraph_is_ignored(tmp_path: Path) -> None:
     """A sibling module reads ``LIVE_BROKER_*`` but is unreachable from
     the boundary's import closure. The audit MUST scope its reachability
@@ -234,7 +225,6 @@ def test_module_outside_boundary_subgraph_is_ignored(tmp_path: Path) -> None:
 # --- skip-silently contract ----------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #88")
 def test_missing_boundary_module_skips_silently(tmp_path: Path) -> None:
     """The default boundaries include ``caqrs.execution.live_broker`` even
     though the module does not exist yet (P4 pending). The audit MUST
