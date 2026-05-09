@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from caqrs.agents.protocol import AgentResult
 from caqrs.execution.execution_report import ExecutionReport, ExecutionStatus
+from caqrs.execution.live_broker_alpaca import LiveBrokerAlpaca
 from caqrs.execution.paper_broker import PaperBroker
 from caqrs.orchestrator import (
     CycleBudget,
@@ -316,7 +317,7 @@ def _make_runner(
     *,
     decision: StrategyDecision | None = None,
     policy_gateway_config: PolicyGatewayConfig | None = None,
-    broker: PaperBroker | _SpyBroker | None = None,
+    broker: PaperBroker | _SpyBroker | LiveBrokerAlpaca | None = None,
     price_provider: PriceProvider | None = None,
     event_log: EventLog | None = None,
     cycle_store: CycleStoreProtocol | None = None,
@@ -666,3 +667,87 @@ async def test_cycle_store_receives_broker_event() -> None:
     assert saved_result == result
     kinds = [event.kind for event in saved_events]
     assert CycleEventKind.BROKER_EXECUTED in kinds
+
+
+# === LiveBrokerAlpaca wiring (NFR-LIVE-BROKER-7) =============================
+
+
+@pytest.mark.asyncio
+async def test_live_broker_emits_broker_live_rejected_with_runner_cycle_id() -> None:
+    """NFR-LIVE-BROKER-7 + runner integration: when CycleRunner reaches
+    the broker step with a LiveBrokerAlpaca, the broker MUST emit a
+    BROKER_LIVE_REJECTED event (default-off short-circuit) into the
+    same EventLog the runner uses, AND the events MUST carry the
+    runners current cycle_id (not the cycle_id passed to the broker
+    constructor). The runner MUST NOT emit BROKER_EXECUTED for live
+    brokers — the BROKER_LIVE_* taxonomy is authoritative."""
+    log = EventLog()
+    paper = PaperBroker(initial_capital_usd=Decimal("10000"))
+    # No cycle_id / event_log at construction — the runner injects them
+    # via attach_cycle_context per-cycle (Codex audit refactor).
+    live = LiveBrokerAlpaca(
+        paper_broker=paper,
+        live_broker_daily_loss_cap_usd=Decimal("1000"),
+    )
+    runner = _make_runner(
+        policy_gateway_config=PolicyGatewayConfig(),
+        broker=live,
+        price_provider=_default_prices,
+        event_log=log,
+    )
+    runner_cycle_id = runner._budget.cycle_id
+
+    await runner.run(_observer_input())
+
+    rejected = log.filter_by_kind(CycleEventKind.BROKER_LIVE_REJECTED)
+    assert len(rejected) == 1
+    assert rejected[0].cycle_id == runner_cycle_id
+    assert rejected[0].payload["reason"] == "live orders disabled"
+    # Runner MUST NOT have emitted BROKER_EXECUTED for the live broker.
+    assert log.filter_by_kind(CycleEventKind.BROKER_EXECUTED) == ()
+
+
+@pytest.mark.asyncio
+async def test_live_broker_kill_switch_engaged_emits_rejected_not_executed() -> None:
+    """Kill switch engaged BEFORE the runner reaches the broker step:
+    LiveBroker.execute() short-circuits with reason 'kill switch engaged'
+    and emits BROKER_LIVE_REJECTED into the runner's log. The runner
+    MUST NOT emit BROKER_EXECUTED for the live broker."""
+    log = EventLog()
+    paper = PaperBroker(initial_capital_usd=Decimal("10000"))
+    live = LiveBrokerAlpaca(
+        paper_broker=paper,
+        live_broker_daily_loss_cap_usd=Decimal("1000"),
+    )
+    live.kill_switch()  # engage outside any cycle context
+    runner = _make_runner(
+        policy_gateway_config=PolicyGatewayConfig(),
+        broker=live,
+        price_provider=_default_prices,
+        event_log=log,
+    )
+    await runner.run(_observer_input())
+    rejected = log.filter_by_kind(CycleEventKind.BROKER_LIVE_REJECTED)
+    assert len(rejected) == 1
+    assert rejected[0].payload["reason"] == "kill switch engaged"
+    assert log.filter_by_kind(CycleEventKind.BROKER_EXECUTED) == ()
+
+
+@pytest.mark.asyncio
+async def test_live_broker_attach_detach_pairs_per_execute() -> None:
+    """attach_cycle_context is non-reentrant: a second attach without a
+    detach in between MUST raise RuntimeError. This regression-guards
+    the cycle attribution invariant Codex audit 2026-05-09 finding 2
+    flagged."""
+    paper = PaperBroker(initial_capital_usd=Decimal("10000"))
+    live = LiveBrokerAlpaca(
+        paper_broker=paper,
+        live_broker_daily_loss_cap_usd=Decimal("1000"),
+    )
+    log = EventLog()
+    live.attach_cycle_context(cycle_id="cycle1", event_log=log)
+    with pytest.raises(RuntimeError, match="non-reentrant"):
+        live.attach_cycle_context(cycle_id="cycle2", event_log=log)
+    live.detach_cycle_context()
+    # After detach, another attach succeeds — not stuck.
+    live.attach_cycle_context(cycle_id="cycle3", event_log=log)

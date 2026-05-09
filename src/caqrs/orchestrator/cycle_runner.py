@@ -51,7 +51,7 @@ from caqrs.agents.protocol import Agent, AgentResult
 from caqrs.agents.research import ResearchInput
 from caqrs.entities.resolver import EntityResolver
 from caqrs.execution.execution_report import ExecutionReport
-from caqrs.execution.protocol import BrokerProtocol
+from caqrs.execution.protocol import BrokerProtocol, LiveBrokerProtocol
 from caqrs.orchestrator.budget import (
     BudgetGuard,
     BudgetStatus,
@@ -209,6 +209,22 @@ class _RunContext:
     event_log: EventLog
 
 
+def _is_live_broker(broker: BrokerProtocol) -> bool:
+    """Runtime-check whether a broker satisfies :class:`LiveBrokerProtocol`.
+
+    A LiveBroker exposes the full lifecycle surface (``enable_live_orders``,
+    ``attach_cycle_context``, ``detach_cycle_context``) — not just the
+    NFR-1 default-off flag. Per Codex audit 2026-05-09 finding 1, the
+    earlier hasattr-on-``enable_live_orders``-only check was too weak:
+    a paper broker that grew an ``enable_live_orders`` attribute for
+    its own reasons would accidentally trip the live-broker branch and
+    silently lose its ``BROKER_EXECUTED`` audit event.
+    ``isinstance`` against the runtime-checkable Protocol asserts all
+    three surfaces simultaneously.
+    """
+    return isinstance(broker, LiveBrokerProtocol)
+
+
 class CycleRunner:
     """Drives one research cycle from Observer through Decider."""
 
@@ -247,7 +263,7 @@ class CycleRunner:
         self._price_provider = price_provider
         self._entity_resolver = entity_resolver
 
-    async def run(self, observer_input: ObserverInput) -> CycleResult:  # noqa: PLR0911, PLR0912
+    async def run(self, observer_input: ObserverInput) -> CycleResult:  # noqa: PLR0911, PLR0912, PLR0915
         # Each early-return is a deliberate fail-fast at a phase boundary
         # (observer / hypothesis / skeptic / research / backtest / auditor).
         # Collapsing them into a loop would obscure the typed contract that
@@ -428,17 +444,37 @@ class CycleRunner:
                         reason=f"price_provider: {exc}",
                     ),
                 )
-            report = await self._broker.execute(action=broker_action, prices=prices)
-            ctx.artifacts.execution_report = report
-            ctx.event_log.append(
-                broker_executed_event(
+            # Per ADR-0008 NFR-LIVE-BROKER-7 the live broker emits its
+            # own BROKER_LIVE_* event taxonomy. We therefore route
+            # around BROKER_EXECUTED for live brokers and inject the
+            # per-cycle context (cycle_id + shared event_log) so the
+            # broker's own callbacks emit into the same log the runner
+            # uses. detach_cycle_context is paired in `finally` so an
+            # exception inside execute() doesn't leave broker state
+            # bound to a stale cycle.
+            if isinstance(self._broker, LiveBrokerProtocol):
+                live: LiveBrokerProtocol = self._broker
+                live.attach_cycle_context(
                     cycle_id=ctx.cycle_id,
-                    decision_run_id=broker_action.source_decision_run_id,
-                    status=report.status.value,
-                    fill_count=len(report.fills),
-                    reason=report.reason,
-                ),
-            )
+                    event_log=ctx.event_log,
+                )
+                try:
+                    report = await live.execute(action=broker_action, prices=prices)
+                finally:
+                    live.detach_cycle_context()
+                ctx.artifacts.execution_report = report
+            else:
+                report = await self._broker.execute(action=broker_action, prices=prices)
+                ctx.artifacts.execution_report = report
+                ctx.event_log.append(
+                    broker_executed_event(
+                        cycle_id=ctx.cycle_id,
+                        decision_run_id=broker_action.source_decision_run_id,
+                        status=report.status.value,
+                        fill_count=len(report.fills),
+                        reason=report.reason,
+                    ),
+                )
 
         return self._complete(ctx=ctx, terminal=OrchestratorState.DECIDING)
 

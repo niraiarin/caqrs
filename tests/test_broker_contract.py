@@ -104,7 +104,6 @@ def _make_live_broker_alpaca() -> BrokerProtocol:
     return LiveBrokerAlpaca(
         paper_broker=paper,
         live_broker_daily_loss_cap_usd=Decimal("1000"),
-        cycle_id=new_cycle_id(),
     )
 
 
