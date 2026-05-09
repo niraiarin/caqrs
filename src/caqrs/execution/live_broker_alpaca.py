@@ -32,7 +32,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from decimal import Decimal
+from typing import TextIO
 
 from caqrs.execution.execution_report import (
     ExecutionReport,
@@ -139,25 +141,38 @@ class LiveBrokerAlpaca:
     def enable_live_orders_after_human_approval(
         self,
         *,
-        env_token: str,
+        env_token: str = "LIVE_BROKER_ENABLE_LIVE_ORDERS",
         cli_confirmation_token: str,
     ) -> None:
         """Flip :attr:`enable_live_orders` to ``True`` after the
         ADR-0008 §NFR-LIVE-BROKER-1 two-step approval.
 
-        Stub in this PR: real env-var + CLI-confirmation wiring lands
-        with the Alpaca SDK integration in the follow-up. Until then,
-        production callers MUST NOT have a path to True; the
-        :class:`NotImplementedError` raised here is the binding gate.
+        Verification (both must hold):
+
+        1. ``os.environ[env_token]`` is set to a non-empty value.
+        2. ``cli_confirmation_token`` byte-equals that env value.
+
+        The two-factor invariant: setting the env var alone is not
+        enough (the CLI confirmation has not been performed); running
+        the CLI alone is not enough (the env var must be set
+        independently). The default ``env_token`` is the canonical
+        name from ADR-0008 §NFR-LIVE-BROKER-1.
         """
-        msg = (
-            "real env-var + one-time CLI confirmation workflow "
-            "deferred to the Alpaca SDK integration follow-up; "
-            "the only path to enable_live_orders=True today is the "
-            "_force_enable_live_orders_for_test ctor flag, which is "
-            "test-only by convention"
-        )
-        raise NotImplementedError(msg)
+        env_value = os.environ.get(env_token, "").strip()
+        if not env_value:
+            msg = (
+                f"{env_token} env var must be set to a non-empty value before "
+                "calling enable_live_orders_after_human_approval; run "
+                "`python -m caqrs.execution.live_broker_alpaca confirm-live` first"
+            )
+            raise RuntimeError(msg)
+        if cli_confirmation_token != env_value:
+            msg = (
+                "cli_confirmation_token does not match the env var; "
+                "rerun the confirm-live CLI to refresh the confirmation"
+            )
+            raise RuntimeError(msg)
+        self.enable_live_orders = True
 
     # --- NFR-LIVE-BROKER-4: idempotency key ---------------------------------
 
@@ -384,21 +399,60 @@ class LiveBrokerAlpaca:
 # real sys streams.
 
 
+_CONFIRM_LIVE_ENV_VAR = "LIVE_BROKER_ENABLE_LIVE_ORDERS"
+
+
 def _main(
     argv: list[str],
     *,
-    stdin: object,
-    stdout: object,
-    stderr: object,
+    stdin: TextIO,
+    stdout: TextIO,
+    stderr: TextIO,
 ) -> int:
     """Dispatch the live-broker CLI subcommand. Returns the exit code.
 
-    Step 1 placeholder: signature is in place so tests can target the
-    final API; body is unimplemented until step 2.
+    Currently the only supported subcommand is ``confirm-live``.
     """
-    raise NotImplementedError(
-        "P4 confirm-live CLI step 1 placeholder; impl in step 2",
+    if argv != ["confirm-live"]:
+        print(
+            "usage: python -m caqrs.execution.live_broker_alpaca confirm-live",
+            file=stderr,
+        )
+        return 2
+    secret = os.environ.get(_CONFIRM_LIVE_ENV_VAR, "").strip()
+    if not secret:
+        print(
+            f"{_CONFIRM_LIVE_ENV_VAR} is not set; aborting. "
+            "Set it (e.g. via dotenvx) to a secret of your choosing, "
+            "then re-run this command.",
+            file=stderr,
+        )
+        return 1
+    print(
+        "Live trading is about to be authorised. This is a step toward "
+        "real-money orders being submitted on your behalf.",
+        file=stdout,
     )
+    print(
+        f"Confirm by re-typing the value of ${_CONFIRM_LIVE_ENV_VAR} exactly:",
+        file=stdout,
+        flush=True,
+    )
+    confirmation = stdin.readline().rstrip("\n")
+    if confirmation != secret:
+        print(
+            "confirmation did not match the env var; aborting. No state was changed.",
+            file=stderr,
+        )
+        return 1
+    print(
+        "OK. You may now call "
+        f"enable_live_orders_after_human_approval(env_token={_CONFIRM_LIVE_ENV_VAR!r}, "
+        "cli_confirmation_token=<the same secret you just typed>) "
+        "on your LiveBrokerAlpaca instance.",
+        file=stdout,
+    )
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover — exercised via _main tests

@@ -2946,7 +2946,13 @@ requirements:
       - path: tests/test_live_broker_alpaca.py
         names:
           - test_execute_skipped_when_live_orders_disabled
-          - test_enable_live_orders_after_human_approval_raises_not_implemented
+          - test_enable_live_orders_after_human_approval_succeeds_with_matching_token
+          - test_enable_live_orders_raises_when_env_var_unset
+          - test_enable_live_orders_raises_when_token_mismatch
+          - test_enable_live_orders_raises_when_env_var_empty
+          - test_confirm_live_cli_succeeds_on_matching_input
+          - test_confirm_live_cli_fails_when_env_unset
+          - test_confirm_live_cli_fails_on_mismatched_input
     status: formalized
     notes: "PR #92 LiveBrokerAlpaca: ctor defaults enable_live_orders=False; production path enable_live_orders_after_human_approval() raises NotImplementedError until env-var + CLI workflow lands with the Alpaca SDK integration."
   - id: NFR-LIVE-BROKER-2

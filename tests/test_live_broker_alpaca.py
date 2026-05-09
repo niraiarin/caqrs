@@ -320,21 +320,6 @@ def test_record_realized_loss_rejects_negative_amount() -> None:
         broker.record_realized_loss(amount_usd=Decimal("-1"))
 
 
-def test_enable_live_orders_after_human_approval_raises_not_implemented() -> None:
-    """Codex audit major: production callers MUST NOT have a working
-    path to ``enable_live_orders=True``. The
-    ``enable_live_orders_after_human_approval`` method is the only
-    documented production path; until the env-var + CLI workflow
-    lands, it MUST raise ``NotImplementedError`` so accidental
-    elevation is impossible."""
-    broker = _make_broker()
-    with pytest.raises(NotImplementedError, match="env-var"):
-        broker.enable_live_orders_after_human_approval(
-            env_token="LIVE_BROKER_ENABLE_LIVE_ORDERS",
-            cli_confirmation_token="placeholder",
-        )
-
-
 @pytest.mark.asyncio
 async def test_execute_emits_broker_live_rejected_when_short_circuiting() -> None:
     """NFR-LIVE-BROKER-7 positive side: when ``execute()`` short-circuits
@@ -397,7 +382,6 @@ def test_cap_breach_emits_broker_live_kill_switch_with_cap_breach_reason() -> No
 # removes the xfail markers.
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — confirm-live")
 def test_enable_live_orders_after_human_approval_succeeds_with_matching_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -413,7 +397,6 @@ def test_enable_live_orders_after_human_approval_succeeds_with_matching_token(
     assert broker.enable_live_orders is True
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — confirm-live")
 def test_enable_live_orders_raises_when_env_var_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -429,7 +412,6 @@ def test_enable_live_orders_raises_when_env_var_unset(
     assert broker.enable_live_orders is False
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — confirm-live")
 def test_enable_live_orders_raises_when_token_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -445,7 +427,6 @@ def test_enable_live_orders_raises_when_token_mismatch(
     assert broker.enable_live_orders is False
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — confirm-live")
 def test_enable_live_orders_raises_when_env_var_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -461,7 +442,6 @@ def test_enable_live_orders_raises_when_env_var_empty(
     assert broker.enable_live_orders is False
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — confirm-live")
 def test_confirm_live_cli_succeeds_on_matching_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -476,7 +456,6 @@ def test_confirm_live_cli_succeeds_on_matching_input(
     assert "OK" in stdout.getvalue()
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — confirm-live")
 def test_confirm_live_cli_fails_when_env_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -492,7 +471,6 @@ def test_confirm_live_cli_fails_when_env_unset(
     assert rc != 0
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — confirm-live")
 def test_confirm_live_cli_fails_on_mismatched_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
