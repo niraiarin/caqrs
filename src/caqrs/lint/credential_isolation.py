@@ -100,7 +100,7 @@ DEFAULT_BOUNDARIES: tuple[CredentialBoundary, ...] = (
         forbidden_prefixes=("LIVE_BROKER_",),
     ),
     CredentialBoundary(
-        module="caqrs.execution.live_broker",
+        module="caqrs.execution.live_broker_alpaca",
         forbidden_prefixes=_DATA_SIDE_PREFIXES,
     ),
 )

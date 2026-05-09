@@ -363,3 +363,45 @@ class LiveBrokerAlpaca:
                 reason=reason,
             ),
         )
+
+
+# =====================================================================
+# CLI entrypoint — `python -m caqrs.execution.live_broker_alpaca confirm-live`
+# =====================================================================
+#
+# ADR-0008 §NFR-LIVE-BROKER-1 mandates "an env var that requires manual
+# setting plus a one-time CLI confirmation". This module's CLI dispatch
+# is the second half of that pair: the operator sets
+# LIVE_BROKER_ENABLE_LIVE_ORDERS to a secret of their choosing
+# (the env var SHOULD be encrypted at rest via dotenvx), then runs
+# `python -m caqrs.execution.live_broker_alpaca confirm-live` and
+# re-types the same secret. Two-factor in spirit: persistent env var
+# config + interactive re-confirm.
+#
+# `_main(argv, stdin, stdout, stderr)` is parameterised so unit tests
+# can drive it without monkey-patching sys streams. The
+# `if __name__ == "__main__":` guard at the bottom invokes it with the
+# real sys streams.
+
+
+def _main(
+    argv: list[str],
+    *,
+    stdin: object,
+    stdout: object,
+    stderr: object,
+) -> int:
+    """Dispatch the live-broker CLI subcommand. Returns the exit code.
+
+    Step 1 placeholder: signature is in place so tests can target the
+    final API; body is unimplemented until step 2.
+    """
+    raise NotImplementedError(
+        "P4 confirm-live CLI step 1 placeholder; impl in step 2",
+    )
+
+
+if __name__ == "__main__":  # pragma: no cover — exercised via _main tests
+    import sys as _sys
+
+    _sys.exit(_main(_sys.argv[1:], stdin=_sys.stdin, stdout=_sys.stdout, stderr=_sys.stderr))

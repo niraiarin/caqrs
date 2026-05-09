@@ -26,12 +26,13 @@ attempts a venue connection.
 
 from __future__ import annotations
 
+import io
 from decimal import Decimal
 
 import pytest
 
 from caqrs.execution.execution_report import ExecutionStatus
-from caqrs.execution.live_broker_alpaca import LiveBrokerAlpaca
+from caqrs.execution.live_broker_alpaca import LiveBrokerAlpaca, _main
 from caqrs.execution.paper_broker import PaperBroker
 from caqrs.orchestrator import EventLog, new_cycle_id
 from caqrs.policy.gateway import FeasibleAction
@@ -387,3 +388,121 @@ def test_cap_breach_emits_broker_live_kill_switch_with_cap_breach_reason() -> No
     events = log.filter_by_kind(CycleEventKind.BROKER_LIVE_KILL_SWITCH)
     assert len(events) == 1
     assert events[0].payload["reason"] == "cap_breach"
+
+
+# === Two-step human approval (env var + CLI) ============================
+# ADR-0008 §NFR-LIVE-BROKER-1; ADR-0009 P4 first-cut follow-up.
+# Step 1: tests xfail because both enable_live_orders_after_human_approval
+# and _main are NotImplementedError stubs. Step 2 implements both and
+# removes the xfail markers.
+
+
+@pytest.mark.xfail(strict=True, reason="impl pending — confirm-live")
+def test_enable_live_orders_after_human_approval_succeeds_with_matching_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When LIVE_BROKER_ENABLE_LIVE_ORDERS is set AND
+    cli_confirmation_token matches, enable_live_orders MUST flip to True."""
+    monkeypatch.setenv("LIVE_BROKER_ENABLE_LIVE_ORDERS", "secret-of-the-day")
+    broker = _make_broker()
+    assert broker.enable_live_orders is False
+    broker.enable_live_orders_after_human_approval(
+        env_token="LIVE_BROKER_ENABLE_LIVE_ORDERS",
+        cli_confirmation_token="secret-of-the-day",
+    )
+    assert broker.enable_live_orders is True
+
+
+@pytest.mark.xfail(strict=True, reason="impl pending — confirm-live")
+def test_enable_live_orders_raises_when_env_var_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the env var set, the method MUST raise — the operator
+    has not completed the two-factor approval."""
+    monkeypatch.delenv("LIVE_BROKER_ENABLE_LIVE_ORDERS", raising=False)
+    broker = _make_broker()
+    with pytest.raises(RuntimeError, match="LIVE_BROKER_ENABLE_LIVE_ORDERS"):
+        broker.enable_live_orders_after_human_approval(
+            env_token="LIVE_BROKER_ENABLE_LIVE_ORDERS",
+            cli_confirmation_token="anything",
+        )
+    assert broker.enable_live_orders is False
+
+
+@pytest.mark.xfail(strict=True, reason="impl pending — confirm-live")
+def test_enable_live_orders_raises_when_token_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Env set, cli token mismatched MUST raise. The match is
+    case-sensitive byte equality."""
+    monkeypatch.setenv("LIVE_BROKER_ENABLE_LIVE_ORDERS", "secret-A")
+    broker = _make_broker()
+    with pytest.raises(RuntimeError, match="does not match"):
+        broker.enable_live_orders_after_human_approval(
+            env_token="LIVE_BROKER_ENABLE_LIVE_ORDERS",
+            cli_confirmation_token="secret-B",
+        )
+    assert broker.enable_live_orders is False
+
+
+@pytest.mark.xfail(strict=True, reason="impl pending — confirm-live")
+def test_enable_live_orders_raises_when_env_var_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An env var set to the empty string is treated as unset — empty
+    is not a valid secret."""
+    monkeypatch.setenv("LIVE_BROKER_ENABLE_LIVE_ORDERS", "")
+    broker = _make_broker()
+    with pytest.raises(RuntimeError, match="must be set to a non-empty value"):
+        broker.enable_live_orders_after_human_approval(
+            env_token="LIVE_BROKER_ENABLE_LIVE_ORDERS",
+            cli_confirmation_token="",
+        )
+    assert broker.enable_live_orders is False
+
+
+@pytest.mark.xfail(strict=True, reason="impl pending — confirm-live")
+def test_confirm_live_cli_succeeds_on_matching_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """confirm-live CLI: env set + stdin matches → exit 0 + 'OK' in stdout."""
+
+    monkeypatch.setenv("LIVE_BROKER_ENABLE_LIVE_ORDERS", "match-me")
+    stdin = io.StringIO("match-me\n")
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    rc = _main(["confirm-live"], stdin=stdin, stdout=stdout, stderr=stderr)
+    assert rc == 0
+    assert "OK" in stdout.getvalue()
+
+
+@pytest.mark.xfail(strict=True, reason="impl pending — confirm-live")
+def test_confirm_live_cli_fails_when_env_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """confirm-live CLI: env unset → exit non-zero, no prompt for input."""
+
+    monkeypatch.delenv("LIVE_BROKER_ENABLE_LIVE_ORDERS", raising=False)
+    rc = _main(
+        ["confirm-live"],
+        stdin=io.StringIO(""),
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+    assert rc != 0
+
+
+@pytest.mark.xfail(strict=True, reason="impl pending — confirm-live")
+def test_confirm_live_cli_fails_on_mismatched_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """confirm-live CLI: env set + stdin mismatched → exit non-zero."""
+
+    monkeypatch.setenv("LIVE_BROKER_ENABLE_LIVE_ORDERS", "match-me")
+    rc = _main(
+        ["confirm-live"],
+        stdin=io.StringIO("not-me\n"),
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+    assert rc != 0
