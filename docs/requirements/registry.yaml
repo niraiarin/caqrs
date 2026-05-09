@@ -22,7 +22,7 @@
 #   #80 -- @traces pytest marker + CI registry consistency check.
 #   #89 -- perf bench harness (turns NFR-PERF-* placeholders into gates).
 
-version: 9
+version: 10
 generated_at: "2026-05-09"
 requirements:
   # =====================================================================
@@ -2914,13 +2914,15 @@ requirements:
     status: formalized
     notes: ""
   # =====================================================================
-  # LIVE-BROKER SAFETY (P4 prerequisite). Spec at
-  # docs/decisions/0008-live-broker-safety.md. Task #87 contract test
-  # suite (tests/test_broker_contract.py) populates the tests[] field
-  # for all 7 NFRs. PaperBroker satisfies NFR-1, -2, -7 (status flipped
-  # to `partial` — partial because the LiveBroker side of each NFR
-  # awaits P4 impl); NFR-3, -4, -5, -6 stay `deferred` (test exists
-  # as xfail; flips to passed when LiveBroker lands).
+  # LIVE-BROKER SAFETY (P4 first-cut landed in PR #92). Spec at
+  # docs/decisions/0008-live-broker-safety.md. ADR-0009 selected Alpaca
+  # as the first venue. PR #92 ships LiveBrokerAlpaca with all 7 NFR
+  # primitives implementable + the BROKER_LIVE_* event taxonomy.
+  # NFR-1, -2, -4, -5, -6 are `formalized` post-#92 (contract suite +
+  # unit tests gate both broker classes). NFR-3 and NFR-7 are `partial`
+  # because the FILLED-pass-through and the SUBMITTED/FILLED/CANCELLED
+  # event halves require the actual Alpaca SDK submission code, which
+  # is the follow-up.
   # =====================================================================
   - id: NFR-LIVE-BROKER-1
     kind: non-functional
@@ -2932,14 +2934,21 @@ requirements:
     target:
       metric: "LiveBroker.execute() return status when enable_live_orders=False"
       threshold: "ExecutionStatus.SKIPPED with reason 'live orders disabled'; flipping the flag requires explicit human approval (env var + one-time CLI confirm)"
-      measurement: "contract test suite (Task #87)"
-    types: []
+      measurement: "contract test suite (Task #87) + LiveBrokerAlpaca unit tests (PR #92)"
+    types:
+      - src/caqrs/execution/live_broker_alpaca.py::LiveBrokerAlpaca
+      - src/caqrs/execution/live_broker_alpaca.py::LiveBrokerAlpaca.enable_live_orders
+      - src/caqrs/execution/live_broker_alpaca.py::LiveBrokerAlpaca.enable_live_orders_after_human_approval
     tests:
       - path: tests/test_broker_contract.py
         names:
           - test_default_off_for_live_brokers_only
-    status: partial
-    notes: "Task #87 contract suite verifies the PaperBroker reading (no live-order surface markers); the LiveBroker reading (enable_live_orders defaults to False) awaits P4 impl"
+      - path: tests/test_live_broker_alpaca.py
+        names:
+          - test_execute_skipped_when_live_orders_disabled
+          - test_enable_live_orders_after_human_approval_raises_not_implemented
+    status: formalized
+    notes: "PR #92 LiveBrokerAlpaca: ctor defaults enable_live_orders=False; production path enable_live_orders_after_human_approval() raises NotImplementedError until env-var + CLI workflow lands with the Alpaca SDK integration."
   - id: NFR-LIVE-BROKER-2
     kind: non-functional
     subsystem: execution
@@ -2950,15 +2959,27 @@ requirements:
     target:
       metric: "static import audit of credential read sites"
       threshold: "PaperBroker reads zero LIVE_BROKER_* env vars; LiveBroker reads zero JQUANTS_/EDINET_/etc. env vars; all live creds dotenvx-encrypted"
-      measurement: "scripts/check_credential_isolation.py (or extension of check_data_source_tos.py); gated by Task #88 lint"
-    types: []
+      measurement: "scripts/check_credential_isolation.py (Task #88 lint, PR #89) + contract suite"
+    types:
+      - src/caqrs/lint/credential_isolation.py::audit_credential_isolation
+      - src/caqrs/lint/credential_isolation.py::DEFAULT_BOUNDARIES
     tests:
       - path: tests/test_broker_contract.py
         names:
           - test_paper_broker_does_not_import_live_broker_env_vars
           - test_broker_does_not_leak_credentials_across_classes
-    status: partial
-    notes: "Task #87 contract suite verifies PaperBroker side (no LIVE_BROKER_* env-var leakage in source); LiveBroker side (no JQUANTS_/EDINET_ leakage) awaits P4 impl"
+      - path: tests/test_check_credential_isolation.py
+        names:
+          - test_real_codebase_passes_default_paper_broker_boundary
+          - test_direct_literal_env_read_violates
+          - test_kwarg_default_env_read_violates
+          - test_transitive_import_chain_is_reported
+          - test_violation_includes_full_import_chain_for_multi_hop
+          - test_unrelated_env_var_is_not_reported
+          - test_module_outside_boundary_subgraph_is_ignored
+          - test_missing_boundary_module_skips_silently
+    status: formalized
+    notes: "PR #89 ships scripts/check_credential_isolation.py — AST graph reachability lint, wired into just ci. PR #92 LiveBrokerAlpaca source has been audited (rg + lint) to contain no JQUANTS_/EDINET_/POLYMARKET_/YFINANCE_ env-var references. Encryption-at-rest (dotenvx) is a deployment concern tracked under NFR-COMPLY-3."
   - id: NFR-LIVE-BROKER-3
     kind: non-functional
     subsystem: execution
@@ -2969,14 +2990,18 @@ requirements:
     target:
       metric: "PaperBroker.execute(action, prices) status before any live submission"
       threshold: "must be ExecutionStatus.FILLED; any non-FILLED rejects the live order and emits BROKER_LIVE_REJECTED"
-      measurement: "contract test suite (Task #87)"
-    types: []
+      measurement: "contract test suite (Task #87) + LiveBrokerAlpaca unit tests"
+    types:
+      - src/caqrs/execution/live_broker_alpaca.py::LiveBrokerAlpaca.execute
     tests:
       - path: tests/test_broker_contract.py
         names:
           - test_dry_run_does_not_change_broker_state
-    status: deferred
-    notes: "Task #87 contract suite carries an xfailed assertion that LiveBroker exposes a dry_run path invoking PaperBroker.execute; xfail flips to passed when LiveBroker lands"
+      - path: tests/test_live_broker_alpaca.py
+        names:
+          - test_execute_skips_when_paper_pre_flight_rejects
+    status: partial
+    notes: "PR #92 LiveBrokerAlpaca.execute() runs PaperBroker.execute() before any submission. The rejection-side (paper non-FILLED → live skips with BROKER_LIVE_REJECTED) is gated. The FILLED-pass-through-to-Alpaca side cannot be exercised end-to-end until the alpaca-py SDK integration lands (the Alpaca submission path currently raises NotImplementedError)."
   - id: NFR-LIVE-BROKER-4
     kind: non-functional
     subsystem: execution
@@ -2987,14 +3012,21 @@ requirements:
     target:
       metric: "idempotency key derivation for replay equivalence"
       threshold: "sha256_hex((cycle_id, decision_run_id, ticker, side, quantity)); same inputs -> same key -> same broker behaviour"
-      measurement: "contract test suite (Task #87): replay test asserts identical key + identical order set"
-    types: []
+      measurement: "contract test suite (Task #87) + LiveBrokerAlpaca unit tests"
+    types:
+      - src/caqrs/execution/live_broker_alpaca.py::LiveBrokerAlpaca.compute_idempotency_key
     tests:
       - path: tests/test_broker_contract.py
         names:
           - test_idempotency_key_is_deterministic
-    status: deferred
-    notes: "Task #87 contract suite carries an xfailed assertion that broker.compute_idempotency_key returns a deterministic 64-char sha256 hex; xfail flips to passed when LiveBroker lands"
+      - path: tests/test_live_broker_alpaca.py
+        names:
+          - test_compute_idempotency_key_returns_64_char_sha256_hex
+          - test_compute_idempotency_key_is_deterministic
+          - test_compute_idempotency_key_changes_with_inputs
+          - test_compute_idempotency_key_resists_separator_injection
+    status: formalized
+    notes: "PR #92 compute_idempotency_key uses canonical-JSON encoding (Codex audit fix) — collision-resistant for str-typed inputs. Per ADR-0009 §NFR-LIVE-BROKER-4 mapping, the venue-side Alpaca client_order_id is the leading 48 chars at submission time; the full 64-char digest is persisted alongside for replay disambiguation (wiring lands with the SDK integration)."
   - id: NFR-LIVE-BROKER-5
     kind: non-functional
     subsystem: execution
@@ -3005,14 +3037,23 @@ requirements:
     target:
       metric: "time-to-abort after LiveBroker.kill_switch() invocation"
       threshold: "<= 1 CycleRunner iteration; post-invocation execute() returns SKIPPED with reason 'kill switch engaged' until human re-enables via NFR-LIVE-BROKER-1 workflow"
-      measurement: "contract test suite (Task #87): API endpoint + signal handler invocation paths"
-    types: []
+      measurement: "contract test suite (Task #87) + LiveBrokerAlpaca unit tests"
+    types:
+      - src/caqrs/execution/live_broker_alpaca.py::LiveBrokerAlpaca.kill_switch
+      - src/caqrs/execution/live_broker_alpaca.py::LiveBrokerAlpaca.kill_switch_engaged
+      - src/caqrs/execution/live_broker_alpaca.py::LiveBrokerAlpaca.reenable_after_human_approval
     tests:
       - path: tests/test_broker_contract.py
         names:
           - test_kill_switch_aborts_within_one_cycle
-    status: deferred
-    notes: "Task #87 contract suite carries an xfailed assertion that broker.kill_switch() forces subsequent execute() to return SKIPPED with reason kill switch engaged; xfail flips to passed when LiveBroker lands"
+      - path: tests/test_live_broker_alpaca.py
+        names:
+          - test_kill_switch_engages_state
+          - test_execute_skipped_when_kill_switch_engaged
+          - test_reenable_after_human_approval_disengages_kill_switch
+          - test_kill_switch_emits_broker_live_kill_switch_event
+    status: formalized
+    notes: "PR #92 kill_switch() flips local state synchronously (≤ 1 cycle bound) and emits BROKER_LIVE_KILL_SWITCH(reason='manual'); reenable_after_human_approval() is the only re-enable path. The Alpaca-side cancel-all + trade_suspended_by_user wiring (per ADR-0009) lands with the SDK integration."
   - id: NFR-LIVE-BROKER-6
     kind: non-functional
     subsystem: execution
@@ -3023,14 +3064,24 @@ requirements:
     target:
       metric: "live_broker_daily_loss_cap_usd vs realized PnL"
       threshold: "broker auto-engages kill_switch() and emits BROKER_LIVE_KILL_SWITCH when realized loss exceeds the broker-level cap; broker and gateway MUST NOT share state for this check"
-      measurement: "contract test suite (Task #87): independent state assertion + cap-breach trigger"
-    types: []
+      measurement: "contract test suite (Task #87) + LiveBrokerAlpaca unit tests"
+    types:
+      - src/caqrs/execution/live_broker_alpaca.py::LiveBrokerAlpaca.live_broker_daily_loss_cap_usd
+      - src/caqrs/execution/live_broker_alpaca.py::LiveBrokerAlpaca.realized_loss_today_usd
+      - src/caqrs/execution/live_broker_alpaca.py::LiveBrokerAlpaca.record_realized_loss
+      - src/caqrs/execution/live_broker_alpaca.py::LiveBrokerAlpaca.reset_day
     tests:
       - path: tests/test_broker_contract.py
         names:
           - test_broker_level_daily_loss_cap_independent_from_gateway
-    status: deferred
-    notes: "Task #87 contract suite carries an xfailed assertion that broker exposes live_broker_daily_loss_cap_usd config + realized_loss_today_usd accumulator independent from PolicyGatewayConfig; xfail flips to passed when LiveBroker lands"
+      - path: tests/test_live_broker_alpaca.py
+        names:
+          - test_realized_loss_cap_breach_engages_kill_switch
+          - test_reset_day_clears_realized_loss_accumulator
+          - test_record_realized_loss_rejects_negative_amount
+          - test_cap_breach_emits_broker_live_kill_switch_with_cap_breach_reason
+    status: formalized
+    notes: "PR #92 LiveBrokerAlpaca holds live_broker_daily_loss_cap_usd + realized_loss_today_usd as independent state from PolicyGatewayConfig (defense in depth per ADR-0008). record_realized_loss(amount_usd>=0) auto-engages kill_switch on cap breach + emits BROKER_LIVE_KILL_SWITCH(reason='cap_breach'). reset_day() clears the accumulator only — kill-switch state survives for human re-enable per NFR-5."
   - id: NFR-LIVE-BROKER-7
     kind: non-functional
     subsystem: execution
@@ -3041,11 +3092,23 @@ requirements:
     target:
       metric: "EventLog event kinds emitted by LiveBroker"
       threshold: "uses BROKER_LIVE_SUBMITTED / BROKER_LIVE_FILLED / BROKER_LIVE_REJECTED / BROKER_LIVE_CANCELLED / BROKER_LIVE_KILL_SWITCH; never BROKER_EXECUTED (paper-only)"
-      measurement: "contract test suite (Task #87): grep BROKER_LIVE_ on EventLog from live-broker run"
-    types: []
+      measurement: "contract test suite (Task #87) + LiveBrokerAlpaca unit tests"
+    types:
+      - src/caqrs/orchestrator/events.py::CycleEventKind.BROKER_LIVE_SUBMITTED
+      - src/caqrs/orchestrator/events.py::CycleEventKind.BROKER_LIVE_FILLED
+      - src/caqrs/orchestrator/events.py::CycleEventKind.BROKER_LIVE_REJECTED
+      - src/caqrs/orchestrator/events.py::CycleEventKind.BROKER_LIVE_CANCELLED
+      - src/caqrs/orchestrator/events.py::CycleEventKind.BROKER_LIVE_KILL_SWITCH
+      - src/caqrs/orchestrator/events.py::broker_live_rejected_event
+      - src/caqrs/orchestrator/events.py::broker_live_kill_switch_event
     tests:
       - path: tests/test_broker_contract.py
         names:
           - test_paper_broker_uses_broker_executed_not_broker_live_kinds
+      - path: tests/test_live_broker_alpaca.py
+        names:
+          - test_execute_emits_broker_live_rejected_when_short_circuiting
+          - test_kill_switch_emits_broker_live_kill_switch_event
+          - test_cap_breach_emits_broker_live_kill_switch_with_cap_breach_reason
     status: partial
-    notes: "Task #87 contract suite verifies PaperBroker emits BROKER_EXECUTED and never BROKER_LIVE_* on the happy path; the LiveBroker positive-side (uses BROKER_LIVE_*) awaits P4 impl"
+    notes: "PR #92 ships 5 BROKER_LIVE_* enum members + 2 typed constructors (broker_live_rejected_event, broker_live_kill_switch_event). LiveBrokerAlpaca emits BROKER_LIVE_REJECTED on every short-circuit (kill-switch / default-off / paper pre-flight) and BROKER_LIVE_KILL_SWITCH on engage. The SUBMITTED/FILLED/CANCELLED half awaits the Alpaca SDK integration; until then the constructors exist but are unused."
