@@ -147,18 +147,41 @@ class LiveBrokerAlpaca:
         """Flip :attr:`enable_live_orders` to ``True`` after the
         ADR-0008 §NFR-LIVE-BROKER-1 two-step approval.
 
-        Verification (both must hold):
+        Verification (all three must hold):
 
-        1. ``os.environ[env_token]`` is set to a non-empty value.
-        2. ``cli_confirmation_token`` byte-equals that env value.
+        1. ``env_token`` starts with the ``LIVE_BROKER_`` prefix —
+           prevents a confused-deputy attack where any known process
+           env var (``PATH``, etc.) gets repurposed as the gate
+           (Codex audit 2026-05-09 finding 1).
+        2. ``os.environ[env_token]`` is set to a non-empty string.
+        3. ``cli_confirmation_token`` is **byte-equal** to that env
+           value — no whitespace stripping (Codex audit 2026-05-09
+           finding 2). ``" secret "`` is not the same secret as
+           ``"secret"``; the gate enforces exact equality.
 
         The two-factor invariant: setting the env var alone is not
         enough (the CLI confirmation has not been performed); running
         the CLI alone is not enough (the env var must be set
         independently). The default ``env_token`` is the canonical
         name from ADR-0008 §NFR-LIVE-BROKER-1.
+
+        Trust model: this is an **operator-friction gate**, not a
+        security primitive against a compromised shell. Anyone who can
+        read the process env and execute Python in this environment
+        can satisfy the gate. The intent is preventing **accidental**
+        live enablement (e.g. forgetting `--paper`); per ADR-0008 the
+        kill switch + per-broker daily loss cap are the
+        defense-in-depth layers against malicious / compromised paths.
         """
-        env_value = os.environ.get(env_token, "").strip()
+        if not env_token.startswith("LIVE_BROKER_"):
+            msg = (
+                f"env_token must start with 'LIVE_BROKER_' (got {env_token!r}); "
+                "the live-broker approval gate is bound to the broker's own "
+                "credential surface to prevent confused-deputy reuse of "
+                "unrelated env vars"
+            )
+            raise RuntimeError(msg)
+        env_value = os.environ.get(env_token, "")
         if not env_value:
             msg = (
                 f"{env_token} env var must be set to a non-empty value before "
@@ -419,7 +442,7 @@ def _main(
             file=stderr,
         )
         return 2
-    secret = os.environ.get(_CONFIRM_LIVE_ENV_VAR, "").strip()
+    secret = os.environ.get(_CONFIRM_LIVE_ENV_VAR, "")
     if not secret:
         print(
             f"{_CONFIRM_LIVE_ENV_VAR} is not set; aborting. "
@@ -438,7 +461,11 @@ def _main(
         file=stdout,
         flush=True,
     )
-    confirmation = stdin.readline().rstrip("\n")
+    # Strip ONLY the trailing newline that readline() appends; do NOT
+    # rstrip() — internal whitespace must round-trip exactly per the
+    # byte-equality contract (Codex audit finding 2).
+    raw = stdin.readline()
+    confirmation = raw[:-1] if raw.endswith("\n") else raw
     if confirmation != secret:
         print(
             "confirmation did not match the env var; aborting. No state was changed.",

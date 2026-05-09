@@ -484,3 +484,37 @@ def test_confirm_live_cli_fails_on_mismatched_input(
         stderr=io.StringIO(),
     )
     assert rc != 0
+
+
+def test_enable_live_orders_rejects_non_live_broker_env_token() -> None:
+    """Codex audit major: env_token MUST start with LIVE_BROKER_ to
+    prevent a confused-deputy attack where an unrelated env var (PATH,
+    HOME, etc.) gets repurposed as the live-trading gate."""
+    broker = _make_broker()
+    with pytest.raises(RuntimeError, match="must start with 'LIVE_BROKER_'"):
+        broker.enable_live_orders_after_human_approval(
+            env_token="PATH",
+            cli_confirmation_token="anything",
+        )
+
+
+def test_enable_live_orders_does_not_strip_env_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex audit major: byte equality means whitespace counts.
+    `" secret "` (with surrounding spaces) is a different secret
+    from `"secret"`; the gate MUST enforce exact equality."""
+    monkeypatch.setenv("LIVE_BROKER_ENABLE_LIVE_ORDERS", " secret ")
+    broker = _make_broker()
+    # Stripped match must FAIL — no silent strip of env value.
+    with pytest.raises(RuntimeError, match="does not match"):
+        broker.enable_live_orders_after_human_approval(
+            env_token="LIVE_BROKER_ENABLE_LIVE_ORDERS",
+            cli_confirmation_token="secret",
+        )
+    # Exact match (with surrounding spaces) succeeds.
+    broker.enable_live_orders_after_human_approval(
+        env_token="LIVE_BROKER_ENABLE_LIVE_ORDERS",
+        cli_confirmation_token=" secret ",
+    )
+    assert broker.enable_live_orders is True
