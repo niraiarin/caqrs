@@ -72,11 +72,9 @@ class LiveBrokerAlpaca:
         *,
         paper_broker: PaperBroker,
         live_broker_daily_loss_cap_usd: Decimal,
-        cycle_id: str,
-        event_log: EventLog | None = None,
         _force_enable_live_orders_for_test: bool = False,
     ) -> None:
-        """Construct a LiveBrokerAlpaca in default-off state.
+        """Construct a LiveBrokerAlpaca in default-off, no-context state.
 
         ``enable_live_orders`` is **never** a constructor arg — the
         only path that flips it in production is
@@ -87,12 +85,12 @@ class LiveBrokerAlpaca:
         exercise the code paths past the default-off short-circuit; it
         MUST NOT be set in production code.
 
-        ``cycle_id`` is required so emitted ``BROKER_LIVE_*`` events
-        can be correlated with the surrounding cycle.
-        ``event_log`` is optional: when provided, this broker emits
-        ``BROKER_LIVE_REJECTED`` / ``BROKER_LIVE_KILL_SWITCH`` events
-        on every short-circuit / auto-engage path per
-        NFR-LIVE-BROKER-7.
+        ``cycle_id`` and ``event_log`` are NOT taken at construction
+        time. The runner injects them per-cycle via
+        :meth:`attach_cycle_context`; tests call ``attach_cycle_context``
+        manually when they want to assert event emission. This makes
+        the per-execute context explicit and forbids implicit miswiring
+        (Codex audit 2026-05-09 finding 3).
         """
         if live_broker_daily_loss_cap_usd <= 0:
             msg = (
@@ -101,12 +99,42 @@ class LiveBrokerAlpaca:
             )
             raise ValueError(msg)
         self._paper_broker = paper_broker
-        self._cycle_id = cycle_id
-        self._event_log = event_log
+        self._cycle_id: str | None = None
+        self._event_log: EventLog | None = None
         self.enable_live_orders: bool = _force_enable_live_orders_for_test
         self.live_broker_daily_loss_cap_usd: Decimal = live_broker_daily_loss_cap_usd
         self.realized_loss_today_usd: Decimal = Decimal(0)
         self._kill_switch_engaged: bool = False
+
+    def attach_cycle_context(self, *, cycle_id: str, event_log: EventLog) -> None:
+        """Attach the per-cycle ``cycle_id`` + ``event_log`` for this
+        broker's ``BROKER_LIVE_*`` event emission. The CycleRunner
+        calls this before each :meth:`execute`; tests call it manually
+        when they want emission turned on.
+
+        Nesting (calling ``attach`` while a context is already live)
+        raises ``RuntimeError`` — the per-execute context is
+        non-reentrant by design, so two concurrent runners cannot
+        silently mis-attribute events to one another's cycles
+        (Codex audit 2026-05-09 finding 2).
+        """
+        if self._cycle_id is not None or self._event_log is not None:
+            msg = (
+                "LiveBrokerAlpaca.attach_cycle_context called while a "
+                "previous context is still attached; the per-execute "
+                "lifecycle is non-reentrant. Did a prior cycle skip "
+                "detach_cycle_context() (e.g. an exception in execute)?"
+            )
+            raise RuntimeError(msg)
+        self._cycle_id = cycle_id
+        self._event_log = event_log
+
+    def detach_cycle_context(self) -> None:
+        """Clear the per-cycle context. Always called from the runner's
+        ``finally`` so an exception inside :meth:`execute` does not
+        leave the broker permanently bound to one cycle's id."""
+        self._cycle_id = None
+        self._event_log = None
 
     def enable_live_orders_after_human_approval(
         self,
@@ -311,20 +339,27 @@ class LiveBrokerAlpaca:
     # --- internal: BROKER_LIVE_* event emission -----------------------------
 
     def _emit_rejected(self, *, decision_run_id: str, reason: str) -> None:
-        if self._event_log is not None:
-            self._event_log.append(
-                broker_live_rejected_event(
-                    cycle_id=self._cycle_id,
-                    decision_run_id=decision_run_id,
-                    reason=reason,
-                ),
-            )
+        # Emission is opt-in: only when an EventLog + cycle_id pair has
+        # been attached via attach_cycle_context. Outside a cycle (e.g.
+        # operator-driven kill_switch from a CLI before a cycle starts)
+        # the broker mutates state but does NOT emit — there's nothing
+        # to attribute the event to.
+        if self._event_log is None or self._cycle_id is None:
+            return
+        self._event_log.append(
+            broker_live_rejected_event(
+                cycle_id=self._cycle_id,
+                decision_run_id=decision_run_id,
+                reason=reason,
+            ),
+        )
 
     def _emit_kill_switch(self, *, reason: str) -> None:
-        if self._event_log is not None:
-            self._event_log.append(
-                broker_live_kill_switch_event(
-                    cycle_id=self._cycle_id,
-                    reason=reason,
-                ),
-            )
+        if self._event_log is None or self._cycle_id is None:
+            return  # see _emit_rejected — emission is cycle-context-gated
+        self._event_log.append(
+            broker_live_kill_switch_event(
+                cycle_id=self._cycle_id,
+                reason=reason,
+            ),
+        )

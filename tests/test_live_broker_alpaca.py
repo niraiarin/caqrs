@@ -45,14 +45,21 @@ def _make_broker(
     cap_usd: Decimal = Decimal("1000"),
     event_log: EventLog | None = None,
 ) -> LiveBrokerAlpaca:
+    """Build a LiveBrokerAlpaca and (when ``event_log`` is provided)
+    attach a per-cycle context so unit tests can assert event emission.
+
+    The runner-driven path uses :meth:`LiveBrokerAlpaca.attach_cycle_context`
+    automatically; tests that want emission outside a runner attach
+    here for symmetry."""
     paper = PaperBroker(initial_capital_usd=Decimal("100000"))
-    return LiveBrokerAlpaca(
+    broker = LiveBrokerAlpaca(
         paper_broker=paper,
         live_broker_daily_loss_cap_usd=cap_usd,
-        cycle_id=new_cycle_id(),
-        event_log=event_log,
         _force_enable_live_orders_for_test=enable_live_orders,
     )
+    if event_log is not None:
+        broker.attach_cycle_context(cycle_id=new_cycle_id(), event_log=event_log)
+    return broker
 
 
 # --- T-LBA-1: idempotency key is a 64-char sha256 hex --------------------
