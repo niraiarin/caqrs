@@ -54,7 +54,6 @@ def _make_broker(
 # --- T-LBA-1: idempotency key is a 64-char sha256 hex --------------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — P4")
 def test_compute_idempotency_key_returns_64_char_sha256_hex() -> None:
     """NFR-LIVE-BROKER-4: ``compute_idempotency_key`` MUST return the
     full 64-char sha256 hex digest. ADR-0009 specifies the
@@ -78,7 +77,6 @@ def test_compute_idempotency_key_returns_64_char_sha256_hex() -> None:
 # --- T-LBA-2: idempotency key is deterministic over equal inputs ---------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — P4")
 def test_compute_idempotency_key_is_deterministic() -> None:
     """Same input tuple MUST produce the same key on every call. The
     NFR-LIVE-BROKER-4 contract test in the broker-protocol suite
@@ -106,7 +104,6 @@ def test_compute_idempotency_key_is_deterministic() -> None:
 # --- T-LBA-3: idempotency key differs across input tuples ----------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — P4")
 def test_compute_idempotency_key_changes_with_inputs() -> None:
     """Different input tuples MUST produce different keys. Trivial
     requirement for sha256, but the test pins it so a downstream
@@ -144,7 +141,6 @@ def test_compute_idempotency_key_changes_with_inputs() -> None:
 # --- T-LBA-4: kill-switch flips the engaged flag --------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — P4")
 def test_kill_switch_engages_state() -> None:
     """``kill_switch()`` MUST flip the engaged flag; subsequent
     inspections MUST return ``True`` until ``reenable_after_human_approval``
@@ -158,7 +154,6 @@ def test_kill_switch_engages_state() -> None:
 # --- T-LBA-5: kill-switch causes execute() to skip ------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — P4")
 @pytest.mark.asyncio
 async def test_execute_skipped_when_kill_switch_engaged() -> None:
     """After ``kill_switch()`` is called, ``execute()`` MUST return
@@ -181,7 +176,6 @@ async def test_execute_skipped_when_kill_switch_engaged() -> None:
 # --- T-LBA-6: execute skips when default-off ------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — P4")
 @pytest.mark.asyncio
 async def test_execute_skipped_when_live_orders_disabled() -> None:
     """When ``enable_live_orders=False`` (the default), ``execute()``
@@ -202,7 +196,6 @@ async def test_execute_skipped_when_live_orders_disabled() -> None:
 # --- T-LBA-7: execute pre-flights paper before live ----------------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — P4")
 @pytest.mark.asyncio
 async def test_execute_skips_when_paper_pre_flight_rejects() -> None:
     """NFR-LIVE-BROKER-3 dry-run parity: even with
@@ -228,24 +221,24 @@ async def test_execute_skips_when_paper_pre_flight_rejects() -> None:
 # --- T-LBA-8: cap breach engages kill-switch -----------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — P4")
 def test_realized_loss_cap_breach_engages_kill_switch() -> None:
     """NFR-LIVE-BROKER-6: when the realized-loss accumulator exceeds
     ``live_broker_daily_loss_cap_usd``, the kill switch MUST be
     engaged automatically."""
     broker = _make_broker(cap_usd=Decimal("100"))
-    assert broker.kill_switch_engaged is False
     broker.record_realized_loss(amount_usd=Decimal("50"))
-    assert broker.kill_switch_engaged is False  # below cap
+    # below cap — kill switch must NOT have engaged.
+    pre_breach_engaged = broker.kill_switch_engaged
+    assert pre_breach_engaged is False
     broker.record_realized_loss(amount_usd=Decimal("60"))  # now total = 110 > 100
-    assert broker.kill_switch_engaged is True
-    assert broker.realized_loss_today_usd == Decimal("110")  # type: ignore[unreachable]
+    post_breach_engaged = broker.kill_switch_engaged
+    assert post_breach_engaged is True
+    assert broker.realized_loss_today_usd == Decimal("110")
 
 
 # --- T-LBA-9: reset_day clears the accumulator ---------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — P4")
 def test_reset_day_clears_realized_loss_accumulator() -> None:
     """``reset_day()`` MUST zero the accumulator. The kill-switch
     state, however, MUST NOT be reset by ``reset_day()`` — re-enable
@@ -266,7 +259,6 @@ def test_reset_day_clears_realized_loss_accumulator() -> None:
 # --- T-LBA-10: re-enable disengages kill-switch --------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — P4")
 def test_reenable_after_human_approval_disengages_kill_switch() -> None:
     """``reenable_after_human_approval()`` MUST clear the kill-switch
     flag. Per ADR-0008 NFR-LIVE-BROKER-5 the caller is responsible

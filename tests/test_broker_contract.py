@@ -38,7 +38,6 @@ import inspect
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING
 
 import pytest
 from pydantic import BaseModel
@@ -46,7 +45,9 @@ from pydantic import BaseModel
 from caqrs.agents.protocol import AgentResult
 from caqrs.execution import paper_broker as paper_broker_module
 from caqrs.execution.execution_report import ExecutionStatus
+from caqrs.execution.live_broker_alpaca import LiveBrokerAlpaca
 from caqrs.execution.paper_broker import PaperBroker
+from caqrs.execution.protocol import BrokerProtocol
 from caqrs.orchestrator import (
     CycleBudget,
     CycleEventKind,
@@ -87,27 +88,44 @@ from caqrs.schemas.research_plan import (
 )
 from caqrs.schemas.skeptic import SkepticReport, SkepticVerdict
 
-if TYPE_CHECKING:
-    from caqrs.execution.protocol import BrokerProtocol
-
-
 # === Fixture: parametrize across broker implementations =====================
+
+
+def _make_paper_broker() -> BrokerProtocol:
+    return PaperBroker(initial_capital_usd=Decimal("100000"))
+
+
+def _make_live_broker_alpaca() -> BrokerProtocol:
+    """Construct a default-off LiveBrokerAlpaca with an injected
+    PaperBroker for the NFR-3 dry-run-parity pre-flight. The
+    constructor reads no env vars, so this fixture is safe to invoke
+    in any test environment."""
+    paper = PaperBroker(initial_capital_usd=Decimal("100000"))
+    return LiveBrokerAlpaca(
+        paper_broker=paper,
+        live_broker_daily_loss_cap_usd=Decimal("1000"),
+        enable_live_orders=False,
+    )
 
 
 @pytest.fixture(
     params=[
-        pytest.param(
-            lambda: PaperBroker(initial_capital_usd=Decimal("100000")),
-            id="PaperBroker",
-        ),
-        # LiveBroker will be added in P4 PR; the contract suite already
-        # has the slot. Adding the param is the only test-side change
-        # required when LiveBroker lands.
+        pytest.param(_make_paper_broker, id="PaperBroker"),
+        pytest.param(_make_live_broker_alpaca, id="LiveBrokerAlpaca"),
     ],
 )
 def broker(request: pytest.FixtureRequest) -> BrokerProtocol:
     factory: Callable[[], BrokerProtocol] = request.param
     return factory()
+
+
+def _is_paper_only(broker: BrokerProtocol) -> bool:
+    """True iff the broker has no live-order surface. The 4 NFR-3..6
+    contract tests below are PaperBroker-N/A by spec; this helper
+    triggers a runtime ``pytest.xfail`` so the same test body
+    asserts the LiveBroker contract for live brokers and skips
+    expectedly for paper brokers."""
+    return not hasattr(broker, "enable_live_orders")
 
 
 # === NFR-LIVE-BROKER-1: Default-off ========================================
@@ -217,52 +235,54 @@ def test_broker_does_not_leak_credentials_across_classes(
 # Spec: docs/decisions/0008-live-broker-safety.md §"NFR-LIVE-BROKER-3"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="PaperBroker has no separate dry-run mode (it IS the dry-run); "
-    "NFR-LIVE-BROKER-3 applies to LiveBroker pre-flight wiring",
-)
 @pytest.mark.asyncio
 async def test_dry_run_does_not_change_broker_state(broker: BrokerProtocol) -> None:
-    """LiveBroker MUST expose a ``dry_run=True`` execute path that
-    invokes ``PaperBroker.execute`` internally and asserts the result
-    is ``ExecutionStatus.FILLED`` before any venue submission. State
-    on the live broker (positions, idempotency-key log, kill-switch
-    counter) MUST be unchanged after a dry-run call.
+    """LiveBroker MUST run ``PaperBroker.execute`` as a pre-flight on
+    every ``execute()`` call; if the paper-side report is non-FILLED
+    the live broker MUST short-circuit without venue submission.
 
     For PaperBroker this NFR is N/A — there is no separate dry-run
-    mode because the entire broker IS the dry-run. The xfail here
-    documents the contract for LiveBroker; the assertion will be
-    authored when LiveBroker lands.
-    """
-    raise NotImplementedError("LiveBroker dry-run-parity assertion deferred to P4 PR")
+    mode because the entire broker IS the dry-run. ``pytest.xfail()``
+    runtime branches the assertion: paper expects-fail, live asserts
+    the contract."""
+    if _is_paper_only(broker):
+        pytest.xfail(
+            reason="PaperBroker has no separate dry-run mode (it IS the dry-run); "
+            "NFR-LIVE-BROKER-3 applies to LiveBroker pre-flight wiring",
+        )
+    # Verifies the contract on a live broker: when paper rejects,
+    # live skips. Trigger paper rejection by omitting prices.
+    broker.enable_live_orders = True  # type: ignore[attr-defined]
+    action = FeasibleAction(
+        action=DecisionAction.ADOPT,
+        targets=(TargetPosition(ticker="AAPL", side=Side.BUY, weight=Decimal("0.5")),),
+        violations=(),
+        source_decision_run_id=new_run_id(),
+    )
+    report = await broker.execute(action=action, prices={})
+    assert report.status is ExecutionStatus.SKIPPED
+    assert "paper pre-flight" in (report.reason or "").lower()
 
 
 # === NFR-LIVE-BROKER-4: Idempotency key on every order =====================
 # Spec: docs/decisions/0008-live-broker-safety.md §"NFR-LIVE-BROKER-4"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="PaperBroker doesn't implement idempotency keys; "
-    "NFR-LIVE-BROKER-4 is a LiveBroker contract",
-)
 def test_idempotency_key_is_deterministic(broker: BrokerProtocol) -> None:
     """LiveBroker MUST expose a ``compute_idempotency_key`` helper
     such that for any
     ``(cycle_id, decision_run_id, ticker, side, quantity)`` tuple,
     repeated invocations return the same sha256 hex digest.
 
-    Spec key derivation:
-    ``sha256_hex((cycle_id, decision_run_id, ticker, side, quantity))``
-    (canonical-JSON of the same fields is also acceptable; the exact
-    serialization is a P4 ADR-0009 detail).
-
     For PaperBroker this NFR is N/A — paper has no venue, no replay
-    semantics, no idempotency contract. The xfail documents the
-    expected helper signature; the assertion below describes what the
-    LiveBroker PR must satisfy.
-    """
+    semantics, no idempotency contract. The runtime ``pytest.xfail()``
+    documents the contract; the assertion runs against the live
+    broker."""
+    if _is_paper_only(broker):
+        pytest.xfail(
+            reason="PaperBroker doesn't implement idempotency keys; "
+            "NFR-LIVE-BROKER-4 is a LiveBroker contract",
+        )
     cycle_id = new_cycle_id()
     decision_run_id = new_run_id()
     args = {
@@ -272,8 +292,7 @@ def test_idempotency_key_is_deterministic(broker: BrokerProtocol) -> None:
         "side": Side.BUY,
         "quantity": Decimal("100"),
     }
-    compute = getattr(broker, "compute_idempotency_key", None)
-    assert compute is not None, "broker.compute_idempotency_key is required by NFR-LIVE-BROKER-4"
+    compute = broker.compute_idempotency_key  # type: ignore[attr-defined]
     key_a = compute(**args)
     key_b = compute(**args)
     assert key_a == key_b, "idempotency key MUST be deterministic"
@@ -285,11 +304,6 @@ def test_idempotency_key_is_deterministic(broker: BrokerProtocol) -> None:
 # Spec: docs/decisions/0008-live-broker-safety.md §"NFR-LIVE-BROKER-5"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="PaperBroker is synchronous and has no in-flight order state; "
-    "NFR-LIVE-BROKER-5 is a LiveBroker contract",
-)
 @pytest.mark.asyncio
 async def test_kill_switch_aborts_within_one_cycle(broker: BrokerProtocol) -> None:
     """LiveBroker MUST expose a ``kill_switch()`` method that:
@@ -300,13 +314,13 @@ async def test_kill_switch_aborts_within_one_cycle(broker: BrokerProtocol) -> No
        until a human re-enables via the NFR-1 approval workflow.
 
     For PaperBroker this NFR is structurally N/A: synchronous,
-    in-process execution has no "in-flight" window to abort. The xfail
-    documents the expected interface; the assertion body below
-    describes what the LiveBroker PR must satisfy.
-    """
-    kill = getattr(broker, "kill_switch", None)
-    assert kill is not None, "broker.kill_switch() is required by NFR-LIVE-BROKER-5"
-    kill()
+    in-process execution has no "in-flight" window to abort."""
+    if _is_paper_only(broker):
+        pytest.xfail(
+            reason="PaperBroker is synchronous and has no in-flight order state; "
+            "NFR-LIVE-BROKER-5 is a LiveBroker contract",
+        )
+    broker.kill_switch()  # type: ignore[attr-defined]
     action = FeasibleAction(
         action=DecisionAction.ADOPT,
         targets=(TargetPosition(ticker="AAPL", side=Side.BUY, weight=Decimal("0.5")),),
@@ -322,11 +336,6 @@ async def test_kill_switch_aborts_within_one_cycle(broker: BrokerProtocol) -> No
 # Spec: docs/decisions/0008-live-broker-safety.md §"NFR-LIVE-BROKER-6"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="PaperBroker exposes realized_pnl_usd but no cap-trigger; "
-    "NFR-LIVE-BROKER-6 is a LiveBroker contract (independent state)",
-)
 def test_broker_level_daily_loss_cap_independent_from_gateway(
     broker: BrokerProtocol,
 ) -> None:
@@ -338,18 +347,18 @@ def test_broker_level_daily_loss_cap_independent_from_gateway(
     depth), not an inefficiency.
 
     For PaperBroker this NFR is N/A — paper has ``realized_pnl_usd``
-    but no cap and no auto-kill-switch. The assertion body below
-    describes the expected LiveBroker surface (cap config attribute +
-    internal accumulator).
-    """
-    cap = getattr(broker, "live_broker_daily_loss_cap_usd", None)
-    assert cap is not None, "broker.live_broker_daily_loss_cap_usd is required by NFR-LIVE-BROKER-6"
+    but no cap and no auto-kill-switch."""
+    if _is_paper_only(broker):
+        pytest.xfail(
+            reason="PaperBroker exposes realized_pnl_usd but no cap-trigger; "
+            "NFR-LIVE-BROKER-6 is a LiveBroker contract (independent state)",
+        )
     # Independence assertion: the broker's loss accumulator must be
     # readable WITHOUT any PolicyGatewayConfig in scope.
-    accumulator = getattr(broker, "realized_loss_today_usd", None)
-    assert accumulator is not None, (
-        "broker.realized_loss_today_usd accumulator is required by NFR-LIVE-BROKER-6"
-    )
+    cap = broker.live_broker_daily_loss_cap_usd  # type: ignore[attr-defined]
+    assert cap is not None
+    accumulator = broker.realized_loss_today_usd  # type: ignore[attr-defined]
+    assert accumulator is not None
 
 
 # === NFR-LIVE-BROKER-7: Distinct event taxonomy ============================
