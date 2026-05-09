@@ -142,3 +142,36 @@ Compliance scope notes:
 |---|---|---|---|---|---|---|
 | NFR-UX-1 | OpenAPI schema includes core artifact schemas | `openapi.json` `components.schemas` entries | covers the public artifact set: `ObserverInput`, `StrategyDecision`, `BacktestReport`, `RunMetadata`, `Provenance`, `CycleResult` (extend as the public surface grows) | `test_core_schemas_appear_in_openapi_components` in `tests/test_api_app_skeleton.py` | CI (existing unit test) | `caqrs.api` schema export |
 | NFR-UX-2 | `AuthError` message names the exact renewal command | error string from `caqrs.providers.errors.AuthError` on pre-flight expiry | message contains the literal renewal command (e.g. `claude login`, `codex login`) | `test_complete_raises_when_cred_expired` for both `anthropic_cli` and `codex_cli` providers | CI (existing unit tests) | `caqrs.providers.errors` |
+
+### Live broker safety (P4 prerequisite)
+
+Subsystem-specific cluster (subsystem `execution`), not an ISO/IEC 25010 axis.
+Spec is ADR-0008 in full. The seven NFRs below are the binding perimeter any
+future `LiveBroker` must satisfy; the contract test suite in
+`tests/test_broker_contract.py` (Task #87) holds the assertions, with four
+xfail markers that flip when the LiveBroker class lands.
+
+| ID | Title | Metric | Threshold | Measurement | Gate | Enforcement |
+|---|---|---|---|---|---|---|
+| NFR-LIVE-BROKER-1 | Default-off via `enable_live_orders` flag with two-step human approval | `LiveBroker.execute()` return when `enable_live_orders=False` | `ExecutionStatus.SKIPPED` with reason `"live orders disabled"`; flipping requires env var + one-time CLI confirm | `tests/test_broker_contract.py::test_default_off_for_live_brokers_only` | CI (contract suite); LiveBroker side flips on P4 | ADR-0008 §NFR-LIVE-BROKER-1 |
+| NFR-LIVE-BROKER-2 | Credential isolation under `LIVE_BROKER_*` env-var prefix | static import-graph reachability | PaperBroker reads zero `LIVE_BROKER_*`; LiveBroker reads zero `JQUANTS_*`/`EDINET_*`/etc.; all live creds dotenvx-encrypted | `tests/test_broker_contract.py::test_paper_broker_does_not_import_live_broker_env_vars`, `tests/test_broker_contract.py::test_broker_does_not_leak_credentials_across_classes`; transitive-graph audit by `scripts/check_credential_isolation.py` (Task #88) | CI (contract suite + Task #88 lint) | ADR-0008 §NFR-LIVE-BROKER-2 |
+| NFR-LIVE-BROKER-3 | Dry-run parity: every live order pre-flight-simulated by PaperBroker | `PaperBroker.execute(action, prices)` status before live submission | must be `ExecutionStatus.FILLED`; any non-FILLED rejects + emits `BROKER_LIVE_REJECTED` | `tests/test_broker_contract.py::test_dry_run_does_not_change_broker_state` (xfail until P4) | CI (contract suite) | ADR-0008 §NFR-LIVE-BROKER-3 |
+| NFR-LIVE-BROKER-4 | Deterministic idempotency key on every live order | key derivation for replay equivalence | `sha256_hex((cycle_id, decision_run_id, ticker, side, quantity))`; same inputs → same key → same broker behaviour | `tests/test_broker_contract.py::test_idempotency_key_is_deterministic` (xfail until P4) | CI (contract suite) | ADR-0008 §NFR-LIVE-BROKER-4 |
+| NFR-LIVE-BROKER-5 | Kill-switch aborts in-flight within 1 cycle, refuses new orders until human re-enable | time-to-abort after `LiveBroker.kill_switch()` | ≤ 1 `CycleRunner` iteration; post-invocation `execute()` returns SKIPPED with reason `"kill switch engaged"` until human re-enable via NFR-LIVE-BROKER-1 workflow | `tests/test_broker_contract.py::test_kill_switch_aborts_within_one_cycle` (xfail until P4); API endpoint + signal handler invocation paths | CI (contract suite) | ADR-0008 §NFR-LIVE-BROKER-5 |
+| NFR-LIVE-BROKER-6 | Broker-level daily loss cap independent from `PolicyGatewayConfig.daily_loss_limit_usd` | `live_broker_daily_loss_cap_usd` vs realized PnL | broker auto-engages `kill_switch()` and emits `BROKER_LIVE_KILL_SWITCH` on cap breach; broker and gateway MUST NOT share state for this check | `tests/test_broker_contract.py::test_broker_level_daily_loss_cap_independent_from_gateway` (xfail until P4) | CI (contract suite) | ADR-0008 §NFR-LIVE-BROKER-6 |
+| NFR-LIVE-BROKER-7 | Distinct `BROKER_LIVE_*` event taxonomy in EventLog | `CycleEventKind` members emitted by LiveBroker | uses `BROKER_LIVE_SUBMITTED` / `_FILLED` / `_REJECTED` / `_CANCELLED` / `_KILL_SWITCH`; never `BROKER_EXECUTED` (paper-only) | `tests/test_broker_contract.py::test_paper_broker_uses_broker_executed_not_broker_live_kinds`; `grep BROKER_LIVE_` on EventLog from LiveBroker run | CI (contract suite); LiveBroker positive side flips on P4 | ADR-0008 §NFR-LIVE-BROKER-7 |
+
+Notes:
+
+- Three NFRs (1, 2, 7) are `partial` today: PaperBroker satisfies the
+  paper-side guarantee but the LiveBroker reading awaits P4 implementation.
+  Four NFRs (3, 4, 5, 6) are `deferred`: the contract assertion exists as
+  `xfail(strict=True)` and flips to passing when the LiveBroker class
+  lands.
+- Per ADR-0008 implementation checklist, every P4 PR is automatically
+  ADR-0007 trigger 6 (live-broker, regardless of size) and additionally
+  subject to cross-family verifier + human gate per agent-manifesto
+  ADR-027.
+- Per-venue ADRs (ADR-0009, ADR-0010, …) document venue-specific gaps in
+  kill-switch / idempotency / partial-fill semantics. ADR-0009 selects the
+  first venue.
