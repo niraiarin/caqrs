@@ -33,6 +33,7 @@ import pytest
 from caqrs.execution.execution_report import ExecutionStatus
 from caqrs.execution.live_broker_alpaca import LiveBrokerAlpaca
 from caqrs.execution.paper_broker import PaperBroker
+from caqrs.orchestrator import EventLog, new_cycle_id
 from caqrs.policy.gateway import FeasibleAction
 from caqrs.schemas.common import new_run_id
 from caqrs.schemas.decision import DecisionAction, Side, TargetPosition
@@ -42,12 +43,15 @@ def _make_broker(
     *,
     enable_live_orders: bool = False,
     cap_usd: Decimal = Decimal("1000"),
+    event_log: EventLog | None = None,
 ) -> LiveBrokerAlpaca:
     paper = PaperBroker(initial_capital_usd=Decimal("100000"))
     return LiveBrokerAlpaca(
         paper_broker=paper,
         live_broker_daily_loss_cap_usd=cap_usd,
-        enable_live_orders=enable_live_orders,
+        cycle_id=new_cycle_id(),
+        event_log=event_log,
+        _force_enable_live_orders_for_test=enable_live_orders,
     )
 
 
@@ -269,3 +273,110 @@ def test_reenable_after_human_approval_disengages_kill_switch() -> None:
     assert broker.kill_switch_engaged is True
     broker.reenable_after_human_approval()
     assert broker.kill_switch_engaged is False
+
+
+# --- Codex audit (2026-05-09) regression tests -------------------------
+
+
+def test_compute_idempotency_key_resists_separator_injection() -> None:
+    """The previous ``|``-join serialization had a collision via
+    pipe-character injection (e.g. ``cycle_id="a|b"`` vs
+    ``cycle_id="a"`` could produce the same intermediate string).
+    Codex audit blocker: this test pins the canonical-JSON encoding so
+    a future refactor cannot reintroduce the ambiguity."""
+    broker = _make_broker()
+    decision_run_id = new_run_id()
+    a = broker.compute_idempotency_key(
+        cycle_id="aaaaaaaaaaaaaaaa|XXX",
+        decision_run_id=decision_run_id,
+        ticker="AAPL",
+        side=Side.BUY,
+        quantity=Decimal("100"),
+    )
+    b = broker.compute_idempotency_key(
+        cycle_id="aaaaaaaaaaaaaaaa",
+        decision_run_id=f"|XXX{decision_run_id}",
+        ticker="AAPL",
+        side=Side.BUY,
+        quantity=Decimal("100"),
+    )
+    assert a != b
+
+
+def test_record_realized_loss_rejects_negative_amount() -> None:
+    """Codex audit minor: a negative ``amount_usd`` would let a caller
+    artificially reduce the accumulator and unwind the kill-switch
+    cap-breach trigger. Method MUST reject negatives at the boundary."""
+    broker = _make_broker()
+    with pytest.raises(ValueError, match="must be non-negative"):
+        broker.record_realized_loss(amount_usd=Decimal("-1"))
+
+
+def test_enable_live_orders_after_human_approval_raises_not_implemented() -> None:
+    """Codex audit major: production callers MUST NOT have a working
+    path to ``enable_live_orders=True``. The
+    ``enable_live_orders_after_human_approval`` method is the only
+    documented production path; until the env-var + CLI workflow
+    lands, it MUST raise ``NotImplementedError`` so accidental
+    elevation is impossible."""
+    broker = _make_broker()
+    with pytest.raises(NotImplementedError, match="env-var"):
+        broker.enable_live_orders_after_human_approval(
+            env_token="LIVE_BROKER_ENABLE_LIVE_ORDERS",
+            cli_confirmation_token="placeholder",
+        )
+
+
+@pytest.mark.asyncio
+async def test_execute_emits_broker_live_rejected_when_short_circuiting() -> None:
+    """NFR-LIVE-BROKER-7 positive side: when ``execute()`` short-circuits
+    (default-off / kill-switch / paper pre-flight), the broker MUST
+    emit a ``BROKER_LIVE_REJECTED`` event into the injected EventLog —
+    NEVER ``BROKER_EXECUTED`` (paper-only)."""
+    from caqrs.orchestrator import CycleEventKind  # noqa: PLC0415 — local-only
+
+    log = EventLog()
+    broker = _make_broker(event_log=log)
+    action = FeasibleAction(
+        action=DecisionAction.ADOPT,
+        targets=(TargetPosition(ticker="AAPL", side=Side.BUY, weight=Decimal("0.5")),),
+        violations=(),
+        source_decision_run_id=new_run_id(),
+    )
+    await broker.execute(action=action, prices={"AAPL": Decimal("180")})
+
+    rejected = log.filter_by_kind(CycleEventKind.BROKER_LIVE_REJECTED)
+    assert len(rejected) == 1
+    assert "live orders disabled" in rejected[0].payload["reason"]
+
+    paper_only = log.filter_by_kind(CycleEventKind.BROKER_EXECUTED)
+    assert paper_only == ()
+
+
+def test_kill_switch_emits_broker_live_kill_switch_event() -> None:
+    """NFR-LIVE-BROKER-7: ``kill_switch()`` MUST emit
+    ``BROKER_LIVE_KILL_SWITCH`` with ``reason="manual"``."""
+    from caqrs.orchestrator import CycleEventKind  # noqa: PLC0415
+
+    log = EventLog()
+    broker = _make_broker(event_log=log)
+    broker.kill_switch()
+
+    events = log.filter_by_kind(CycleEventKind.BROKER_LIVE_KILL_SWITCH)
+    assert len(events) == 1
+    assert events[0].payload["reason"] == "manual"
+
+
+def test_cap_breach_emits_broker_live_kill_switch_with_cap_breach_reason() -> None:
+    """NFR-LIVE-BROKER-6 + 7: cap-breach auto-engages and emits
+    ``BROKER_LIVE_KILL_SWITCH`` with ``reason="cap_breach"`` so audit
+    can distinguish manual from auto-engagement."""
+    from caqrs.orchestrator import CycleEventKind  # noqa: PLC0415
+
+    log = EventLog()
+    broker = _make_broker(cap_usd=Decimal("100"), event_log=log)
+    broker.record_realized_loss(amount_usd=Decimal("150"))
+
+    events = log.filter_by_kind(CycleEventKind.BROKER_LIVE_KILL_SWITCH)
+    assert len(events) == 1
+    assert events[0].payload["reason"] == "cap_breach"

@@ -38,6 +38,11 @@ class CycleEventKind(StrEnum):
     BUDGET_EXCEEDED = "budget_exceeded"
     POLICY_GATEWAY_APPLIED = "policy_gateway_applied"
     BROKER_EXECUTED = "broker_executed"
+    BROKER_LIVE_SUBMITTED = "broker_live_submitted"
+    BROKER_LIVE_FILLED = "broker_live_filled"
+    BROKER_LIVE_REJECTED = "broker_live_rejected"
+    BROKER_LIVE_CANCELLED = "broker_live_cancelled"
+    BROKER_LIVE_KILL_SWITCH = "broker_live_kill_switch"
     IDENTIFIER_RESOLVED = "identifier_resolved"
 
 
@@ -274,4 +279,44 @@ def identifier_resolved_event(
             "canonical_issuer_id": canonical_issuer_id,
             "matched_kind": matched_kind,
         },
+    )
+
+
+def broker_live_rejected_event(
+    *,
+    cycle_id: str,
+    decision_run_id: str,
+    reason: str,
+    idempotency_key: str | None = None,
+) -> CycleEvent:
+    """ADR-0008 NFR-LIVE-BROKER-7: live broker emits this on every
+    short-circuit path (kill-switch engaged / live orders disabled /
+    paper pre-flight rejected). NEVER ``BROKER_EXECUTED`` (paper-only).
+    """
+    payload: dict[str, Any] = {
+        "decision_run_id": decision_run_id,
+        "reason": reason,
+    }
+    if idempotency_key is not None:
+        payload["idempotency_key"] = idempotency_key
+    return _build_event(
+        cycle_id=cycle_id,
+        kind=CycleEventKind.BROKER_LIVE_REJECTED,
+        payload=payload,
+    )
+
+
+def broker_live_kill_switch_event(
+    *,
+    cycle_id: str,
+    reason: str,
+) -> CycleEvent:
+    """Emitted when the kill switch engages — manual via
+    :meth:`LiveBrokerAlpaca.kill_switch` or auto via
+    NFR-LIVE-BROKER-6 cap breach. The ``reason`` distinguishes the
+    two ('manual' / 'cap_breach') for post-hoc audit."""
+    return _build_event(
+        cycle_id=cycle_id,
+        kind=CycleEventKind.BROKER_LIVE_KILL_SWITCH,
+        payload={"reason": reason},
     )
