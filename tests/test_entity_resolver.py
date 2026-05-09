@@ -174,7 +174,6 @@ def _build_resolver_test_runner(
 # --- T-RES-A1: jquants + edinet -> same canonical issuer -----------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Phase E4")
 def test_jquants_and_edinet_codes_resolve_to_same_canonical_issuer() -> None:
     """An EntityStore seeded with Toyota carries both
     ``(JQUANTS_CODE, "72030")`` and ``(EDINET_CODE, "E02144")``. When
@@ -201,7 +200,6 @@ def test_jquants_and_edinet_codes_resolve_to_same_canonical_issuer() -> None:
 # --- T-RES-A2: unresolved ticker yields null sentinel --------------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Phase E4")
 def test_unresolved_ticker_yields_null_resolution() -> None:
     """A ticker the store knows nothing about MUST yield an
     :class:`IdentifierResolution` with both ``canonical_issuer_id`` and
@@ -209,12 +207,12 @@ def test_unresolved_ticker_yields_null_resolution() -> None:
     issuers."""
     store = InMemoryEntityStore()
     resolver = make_entity_resolver(store=store)
-    obs_input = _observer_input(universe=("UNKNOWN_TICKER",))
+    obs_input = _observer_input(universe=("UNKNOWN.X",))
     resolutions = resolver(obs_input)
 
     assert len(resolutions) == 1
     only = resolutions[0]
-    assert only.input_ticker == "UNKNOWN_TICKER"
+    assert only.input_ticker == "UNKNOWN.X"
     assert only.canonical_issuer_id is None
     assert only.matched_kind is None
 
@@ -222,7 +220,6 @@ def test_unresolved_ticker_yields_null_resolution() -> None:
 # --- T-RES-A3: resolver does not mutate ObserverInput --------------------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Phase E4")
 def test_resolver_does_not_mutate_observer_input() -> None:
     """The resolver is read-only against the input. Calling it MUST
     leave ``ObserverInput.universe`` exactly as the caller passed it
@@ -239,7 +236,6 @@ def test_resolver_does_not_mutate_observer_input() -> None:
 # --- T-RES-A4: CycleRunner emits one IDENTIFIER_RESOLVED per ticker ------
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Phase E4")
 @pytest.mark.asyncio
 async def test_cycle_runner_emits_one_identifier_resolved_event_per_universe_member() -> None:
     """When wired with a resolver, ``CycleRunner.run()`` MUST emit

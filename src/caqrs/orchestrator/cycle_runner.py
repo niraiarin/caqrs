@@ -68,6 +68,7 @@ from caqrs.orchestrator.events import (
     cycle_aborted_event,
     cycle_completed_event,
     cycle_started_event,
+    identifier_resolved_event,
     policy_gateway_applied_event,
     state_transition_event,
 )
@@ -246,7 +247,7 @@ class CycleRunner:
         self._price_provider = price_provider
         self._entity_resolver = entity_resolver
 
-    async def run(self, observer_input: ObserverInput) -> CycleResult:  # noqa: PLR0911
+    async def run(self, observer_input: ObserverInput) -> CycleResult:  # noqa: PLR0911, PLR0912
         # Each early-return is a deliberate fail-fast at a phase boundary
         # (observer / hypothesis / skeptic / research / backtest / auditor).
         # Collapsing them into a loop would obscure the typed contract that
@@ -269,6 +270,26 @@ class CycleRunner:
 
         self._event_log.append(cycle_started_event(cycle_id=cycle_id))
         ctx.machine.transition(OrchestratorState.OBSERVING)
+
+        # === Phase E4 EntityResolver hook ===
+        # Fires before Observer so identifier-resolution events appear
+        # earlier than the observer agent's invocation events. The
+        # resolver is read-only against observer_input; it never
+        # mutates the universe or any other field.
+        if self._entity_resolver is not None:
+            for resolution in self._entity_resolver(observer_input):
+                self._event_log.append(
+                    identifier_resolved_event(
+                        cycle_id=cycle_id,
+                        input_ticker=resolution.input_ticker,
+                        canonical_issuer_id=resolution.canonical_issuer_id,
+                        matched_kind=(
+                            resolution.matched_kind.value
+                            if resolution.matched_kind is not None
+                            else None
+                        ),
+                    ),
+                )
 
         # === Observer ===
         observer_outcome = await self._call_agent(

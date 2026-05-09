@@ -80,6 +80,25 @@ def make_entity_resolver(*, store: EntityStore) -> EntityResolver:
     Phase E5 adds richer resolution (fuzzy matching, prefix-derived
     inference, bulk LEI lookups); they are explicitly out of scope.
     """
-    raise NotImplementedError(
-        "Phase E4 step 1 placeholder; lookup-loop impl in step 2",
-    )
+
+    def _resolve(observer_input: ObserverInput) -> tuple[IdentifierResolution, ...]:
+        results: list[IdentifierResolution] = []
+        for ticker in observer_input.universe:
+            issuer_id: IssuerId | None = None
+            matched_kind: IdentifierKind | None = None
+            for kind in IdentifierKind:
+                hit = store.lookup_issuer(kind=kind, value=str(ticker))
+                if hit is not None:
+                    issuer_id = hit.id
+                    matched_kind = kind
+                    break
+            results.append(
+                IdentifierResolution(
+                    input_ticker=str(ticker),
+                    canonical_issuer_id=issuer_id,
+                    matched_kind=matched_kind,
+                ),
+            )
+        return tuple(results)
+
+    return _resolve
