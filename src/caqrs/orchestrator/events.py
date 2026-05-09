@@ -38,6 +38,7 @@ class CycleEventKind(StrEnum):
     BUDGET_EXCEEDED = "budget_exceeded"
     POLICY_GATEWAY_APPLIED = "policy_gateway_applied"
     BROKER_EXECUTED = "broker_executed"
+    IDENTIFIER_RESOLVED = "identifier_resolved"
 
 
 class CycleEvent(BaseModel):
@@ -245,5 +246,32 @@ def broker_executed_event(
             "status": status,
             "fill_count": fill_count,
             "reason": reason,
+        },
+    )
+
+
+def identifier_resolved_event(
+    *,
+    cycle_id: str,
+    input_ticker: str,
+    canonical_issuer_id: str | None,
+    matched_kind: str | None,
+) -> CycleEvent:
+    """One identifier-resolution event from the Phase E4 EntityResolver.
+
+    ``canonical_issuer_id`` and ``matched_kind`` are both ``None`` when
+    no :class:`~caqrs.entities.types.Identifier` in the resolver's
+    backing store matched the input ticker. Downstream consumers
+    (audit, regret analysis) treat a null ``canonical_issuer_id`` as
+    "the operator passed an identifier the entity layer doesn't yet
+    know about" — distinct from "the operator passed a typo".
+    """
+    return _build_event(
+        cycle_id=cycle_id,
+        kind=CycleEventKind.IDENTIFIER_RESOLVED,
+        payload={
+            "input_ticker": input_ticker,
+            "canonical_issuer_id": canonical_issuer_id,
+            "matched_kind": matched_kind,
         },
     )
