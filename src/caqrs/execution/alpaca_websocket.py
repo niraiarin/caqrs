@@ -24,6 +24,8 @@ ADR-0006 step 1 / step 2 dispatch: bodies raise
 
 from __future__ import annotations
 
+import asyncio
+import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from typing import Protocol
@@ -85,13 +87,88 @@ async def trade_updates_stream(
 
     Reconnect: any exception raised during step 4 (network blip,
     server-side close) drops the websocket, sleeps with exponential
-    backoff (initial → 2× → 4× → ... capped at
-    ``max_backoff_seconds``), and re-runs steps 1–3. The backoff
+    backoff (initial → 2x → 4x → ... capped at
+    ``max_backoff_seconds``), and re-runs steps 1-3. The backoff
     resets to ``initial_backoff_seconds`` after each successful
     handshake so long-lived streams don't accumulate ever-larger
     waits. Auth failures are NOT retried.
+
+    Termination: production usage runs forever (the websocket only
+    closes if the operator cancels the surrounding task). For tests,
+    a graceful end-of-stream from the iterator (no exception) breaks
+    the reconnect loop and returns — this is how unit tests with a
+    finite-message fake websocket can drain the generator.
     """
-    msg = "trade_updates_stream not implemented yet (TDD step 1)"
-    raise NotImplementedError(msg)
-    if False:  # pragma: no cover — yield to declare the function as an async generator
-        yield {}
+    if connect is None:
+        connect = _default_connect
+    if sleep is None:
+        sleep = asyncio.sleep
+    backoff = initial_backoff_seconds
+    while True:
+        try:
+            async with connect(base_url) as ws:
+                await ws.send(
+                    json.dumps({"action": "auth", "key": api_key, "secret": api_secret}),
+                )
+                auth_resp_raw = await ws.recv()
+                auth_resp = json.loads(auth_resp_raw)
+                if not _auth_authorized(auth_resp):
+                    auth_msg = f"Alpaca rejected auth handshake: {auth_resp_raw}"
+                    raise AlpacaWebSocketAuthError(auth_msg)
+                await ws.send(
+                    json.dumps(
+                        {"action": "listen", "data": {"streams": ["trade_updates"]}},
+                    ),
+                )
+                # Drain the listening ack; we don't strictly verify
+                # its shape because Alpaca's exact response format
+                # has historically drifted (status=success vs streams
+                # echo) and either is benign — the only thing we
+                # really need is that the server is now in
+                # subscribed state, which we assume on receipt.
+                _ = await ws.recv()
+                # Successful handshake — reset backoff so transient
+                # post-handshake disconnects don't accumulate ever-
+                # larger waits over the lifetime of the stream.
+                backoff = initial_backoff_seconds
+                async for raw in ws:
+                    yield json.loads(raw)
+                # Iterator ended cleanly (production: never; tests:
+                # the fake websocket exhausted). Treat as graceful
+                # termination so callers' `async for` returns.
+                return
+        except AlpacaWebSocketAuthError:
+            raise
+        except Exception:
+            await sleep(backoff)
+            backoff = min(backoff * 2, max_backoff_seconds)
+            continue
+
+
+def _auth_authorized(resp: object) -> bool:
+    """``True`` iff the response carries
+    ``data.status == "authorized"``. Defensive against missing /
+    wrong-typed fields."""
+    if not isinstance(resp, dict):
+        return False
+    data = resp.get("data")
+    if not isinstance(data, dict):
+        return False
+    return data.get("status") == "authorized"
+
+
+@AbstractAsyncContextManager.register  # marker only; real impl is the contextlib helper below
+class _NotUsed:
+    """Placeholder so the decorator-based registration above type-checks."""
+
+
+def _default_connect(url: str) -> AbstractAsyncContextManager[WebSocketLike]:
+    """Production connect: defers to the :mod:`websockets` library.
+
+    Lazy-imported so non-live deployments don't pull in the
+    websockets dependency. Operators activate this path by NOT
+    passing a ``connect=`` argument to :func:`trade_updates_stream`.
+    """
+    import websockets  # noqa: PLC0415 — late import for optional dep
+
+    return websockets.connect(url)  # type: ignore[return-value]

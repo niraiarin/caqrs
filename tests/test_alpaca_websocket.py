@@ -21,9 +21,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 import pytest
 
@@ -31,9 +30,6 @@ from caqrs.execution.alpaca_websocket import (
     AlpacaWebSocketAuthError,
     trade_updates_stream,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncContextManager
 
 
 class _FakeWebSocket:
@@ -69,7 +65,9 @@ class _FakeWebSocket:
             self._idx += 1
 
 
-def _connect_factory(entries: list[_FakeWebSocket | BaseException]):  # noqa: ANN202 — return type cumbersome
+def _connect_factory(
+    entries: list[_FakeWebSocket | BaseException],
+) -> Callable[[str], AbstractAsyncContextManager[_FakeWebSocket]]:
     """Returns a connect() callable that hands out queued items in
     order. ``_FakeWebSocket`` entries open as a websocket; exception
     entries are raised at connect-time (testing pre-handshake
@@ -78,7 +76,7 @@ def _connect_factory(entries: list[_FakeWebSocket | BaseException]):  # noqa: AN
     iter_entries = iter(entries)
 
     @asynccontextmanager
-    async def _connect(url: str) -> AsyncIterator[_FakeWebSocket]:  # noqa: ARG001 — url unused in tests
+    async def _connect(_url: str) -> AsyncIterator[_FakeWebSocket]:
         try:
             entry = next(iter_entries)
         except StopIteration as exc:
@@ -124,7 +122,6 @@ def _trade_update(client_order_id: str, qty: str, price: str) -> str:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #19 websocket client")
 async def test_trade_updates_stream_sends_auth_then_subscribe() -> None:
     """The first two sends MUST be the auth payload (with key+secret)
     and the trade_updates subscription request, in that order."""
@@ -150,7 +147,6 @@ async def test_trade_updates_stream_sends_auth_then_subscribe() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #19 websocket client")
 async def test_trade_updates_stream_yields_trade_update_messages() -> None:
     """After the auth + subscribe handshake, every subsequent message
     MUST be parsed as JSON and yielded to the caller as ``dict``."""
@@ -162,23 +158,25 @@ async def test_trade_updates_stream_yields_trade_update_messages() -> None:
             _trade_update("xyz789", "1", "45.00"),
         ],
     )
-    received: list[dict[str, object]] = []
-    async for msg in trade_updates_stream(
-        api_key="K",
-        api_secret="S",
-        connect=_connect_factory([ws]),
-        initial_backoff_seconds=0.0,
-    ):
-        received.append(msg)
+    received: list[dict[str, object]] = [
+        msg
+        async for msg in trade_updates_stream(
+            api_key="K",
+            api_secret="S",
+            connect=_connect_factory([ws]),
+            initial_backoff_seconds=0.0,
+        )
+    ]
     assert len(received) == 2
     data0 = received[0]["data"]
     assert isinstance(data0, dict)
     assert data0["event"] == "fill"
-    assert data0["order"]["client_order_id"] == "abc123"  # type: ignore[index]
+    order = data0["order"]
+    assert isinstance(order, dict)
+    assert order["client_order_id"] == "abc123"
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #19 websocket client")
 async def test_trade_updates_stream_raises_on_unauthorized() -> None:
     """Auth failure is a fatal config error, not a transient
     disconnect: the stream MUST raise so the operator surfaces the
@@ -191,13 +189,16 @@ async def test_trade_updates_stream_raises_on_unauthorized() -> None:
         connect=_connect_factory([ws]),
         initial_backoff_seconds=0.0,
     )
-    with pytest.raises(AlpacaWebSocketAuthError):
+
+    async def _drain() -> None:
         async for _ in stream:
             break
 
+    with pytest.raises(AlpacaWebSocketAuthError):
+        await _drain()
+
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #19 websocket client")
 async def test_trade_updates_stream_reconnects_on_connection_closed() -> None:
     """When the iteration loop raises ConnectionClosed (or any
     network-level error), the stream MUST drop the websocket,
@@ -218,15 +219,16 @@ async def test_trade_updates_stream_reconnects_on_connection_closed() -> None:
             _trade_update("def", "2", "101.00"),
         ],
     )
-    received: list[dict[str, object]] = []
-    async for msg in trade_updates_stream(
-        api_key="K",
-        api_secret="S",
-        connect=_connect_factory([ws_first, ws_second]),
-        initial_backoff_seconds=0.0,
-        max_backoff_seconds=0.0,
-    ):
-        received.append(msg)
+    received: list[dict[str, object]] = [
+        msg
+        async for msg in trade_updates_stream(
+            api_key="K",
+            api_secret="S",
+            connect=_connect_factory([ws_first, ws_second]),
+            initial_backoff_seconds=0.0,
+            max_backoff_seconds=0.0,
+        )
+    ]
     # The first websocket's _trade_update before the iter-raise is
     # delivered via the recv() handshake path — actually, reading raises
     # ConnectionError immediately on iter, so first ws yields 0 events.
@@ -234,11 +236,12 @@ async def test_trade_updates_stream_reconnects_on_connection_closed() -> None:
     assert len(received) == 1
     data = received[0]["data"]
     assert isinstance(data, dict)
-    assert data["order"]["client_order_id"] == "def"  # type: ignore[index]
+    order = data["order"]
+    assert isinstance(order, dict)
+    assert order["client_order_id"] == "def"
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #19 websocket client")
 async def test_trade_updates_stream_backoff_doubles_until_ceiling() -> None:
     """Exponential backoff for consecutive PRE-handshake failures
     (DNS, TCP, TLS): each failure MUST double the wait, capped at
@@ -272,7 +275,6 @@ async def test_trade_updates_stream_backoff_doubles_until_ceiling() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #19 websocket client")
 async def test_trade_updates_stream_resets_backoff_on_successful_auth() -> None:
     """A successful auth+subscribe handshake means the connection is
     healthy; the subsequent disconnect-after-handshake MUST reset
@@ -285,10 +287,12 @@ async def test_trade_updates_stream_resets_backoff_on_successful_auth() -> None:
 
     # Three blips that each get past handshake then disconnect; one
     # final clean connection that yields nothing.
-    ws_blip = lambda: _FakeWebSocket(  # noqa: E731
-        [_auth_ok(), _listening_ack()],
-        raise_on_iter=ConnectionError("post-handshake blip"),
-    )
+    def ws_blip() -> _FakeWebSocket:
+        return _FakeWebSocket(
+            [_auth_ok(), _listening_ack()],
+            raise_on_iter=ConnectionError("post-handshake blip"),
+        )
+
     ws_final = _FakeWebSocket([_auth_ok(), _listening_ack()])
     async for _ in trade_updates_stream(
         api_key="K",
