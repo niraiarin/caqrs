@@ -33,6 +33,9 @@ from caqrs.schemas.decision import Side
 
 _DEFAULT_PAPER_BASE_URL = "https://paper-api.alpaca.markets"
 _DEFAULT_TIMEOUT_SECONDS = 30.0
+_CLIENT_ORDER_ID_MAX_LEN = 48  # Alpaca-documented client_order_id length cap
+_HTTP_4XX_FLOOR = 400
+_HTTP_5XX_FLOOR = 500
 
 
 class AlpacaError(Exception):
@@ -173,18 +176,72 @@ class AlpacaRestClient:
     ) -> AlpacaOrder:
         """POST a market order to ``$BASE/v2/orders``.
 
-        Step 1 placeholder: signature is in place so tests can target
-        the final API; body is unimplemented until step 2.
+        Returns the parsed :class:`AlpacaOrder` on success; raises
+        :class:`AlpacaError` on any 4xx/5xx with the venue's error
+        body preserved for the BROKER_LIVE_REJECTED audit payload.
+
+        ``client_order_id`` MUST be ≤ 48 chars (Alpaca's documented
+        limit per ADR-0009); the caller derives it from
+        :meth:`LiveBrokerAlpaca.compute_idempotency_key`'s 64-char
+        digest by truncating to the first 48 chars.
         """
-        raise NotImplementedError(
-            "Alpaca REST step 1 placeholder; submit_order impl in step 2",
+        if len(client_order_id) > _CLIENT_ORDER_ID_MAX_LEN:
+            msg = (
+                f"client_order_id must be <= {_CLIENT_ORDER_ID_MAX_LEN} chars "
+                f"(got {len(client_order_id)}); ADR-0009 specifies the leading "
+                f"{_CLIENT_ORDER_ID_MAX_LEN} chars of compute_idempotency_key's "
+                "64-char digest"
+            )
+            raise ValueError(msg)
+        if qty <= 0:
+            msg = f"qty must be positive (got {qty})"
+            raise ValueError(msg)
+        body: dict[str, str] = {
+            "symbol": str(symbol),
+            "qty": str(qty),
+            "side": "buy" if side is Side.BUY else "sell",
+            "type": order_type,
+            "time_in_force": time_in_force,
+            "client_order_id": client_order_id,
+        }
+        try:
+            resp = await self._client.post(f"{self._base_url}/v2/orders", json=body)
+        except httpx.HTTPError as exc:
+            msg = f"Alpaca REST transport error: {exc}"
+            raise AlpacaError(msg) from exc
+        if resp.status_code >= _HTTP_4XX_FLOOR:
+            raise AlpacaError(
+                f"Alpaca REST {resp.status_code}: order submission rejected",
+                status_code=resp.status_code,
+                venue_body=resp.text,
+            )
+        try:
+            payload = resp.json()
+        except ValueError as exc:
+            msg = f"Alpaca REST {resp.status_code}: response body not JSON"
+            raise AlpacaError(msg, status_code=resp.status_code) from exc
+        return AlpacaOrder(
+            order_id=str(payload["id"]),
+            client_order_id=str(payload.get("client_order_id", client_order_id)),
+            symbol=str(payload["symbol"]),
+            qty=Decimal(str(payload["qty"])),
+            side=str(payload["side"]),
+            status=str(payload["status"]),
         )
 
     async def cancel_all_orders(self) -> None:
         """``DELETE /v2/orders`` — cancel every open order. Used by
-        :meth:`LiveBrokerAlpaca.kill_switch` per ADR-0009.
-
-        Step 1 placeholder."""
-        raise NotImplementedError(
-            "Alpaca REST step 1 placeholder; cancel_all_orders impl in step 2",
-        )
+        :meth:`LiveBrokerAlpaca.kill_switch` per ADR-0009 §"Per-NFR
+        mapping (NFR-LIVE-BROKER-5)". 200 / 204 / 207 (Multi-Status)
+        all succeed; only 5xx raises."""
+        try:
+            resp = await self._client.delete(f"{self._base_url}/v2/orders")
+        except httpx.HTTPError as exc:
+            msg = f"Alpaca REST transport error during cancel-all: {exc}"
+            raise AlpacaError(msg) from exc
+        if resp.status_code >= _HTTP_5XX_FLOOR:
+            raise AlpacaError(
+                f"Alpaca REST {resp.status_code}: cancel-all failed",
+                status_code=resp.status_code,
+                venue_body=resp.text,
+            )

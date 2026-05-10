@@ -62,6 +62,23 @@ When adding a new data source, fill in:
 - [ ] Personal data / GDPR considerations (PRAW exposes pseudonymous user data).
 - [ ] Last reviewed date and reviewer name.
 
+## Execution venues (informational)
+
+Distinct from data sources above: these are brokerage / venue APIs CAQRS
+submits orders to. The TOS lint (``scripts/check_data_source_tos.py``)
+does NOT audit this section — its scope is ``src/caqrs/data/*`` ingestion
+only — but commercial deployment MUST review each venue's customer
+agreement before enabling live trading.
+
+| Venue       | Type                         | License / ToS                                                                                              | Allowed use                                                                | Rate limits                                | Last reviewed |
+| ----------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------ | ------------- |
+| **alpaca**  | Brokerage API (paper + live) | [Alpaca Customer Agreement](https://alpaca.markets/legal) — `# review` confirm exact program terms          | Paper trading on free tier; live trading requires funded account + KYC      | Trading API: ~200 req/min per Alpaca docs | 2026-05-10    |
+
+`# review` markers indicate clauses requiring human ToS reviewer
+sign-off before commercial deployment. ADR-0009 selected Alpaca as the
+first live-broker venue (paper-account first); ADR-0010 (forward
+pointer) covers the next venue.
+
 ## Deferred (not yet integrated)
 
 Forward-looking entries the lint accepts as "extras" — they document

@@ -33,7 +33,6 @@ from caqrs.schemas.decision import Side
 _PAPER_BASE_URL = "https://paper-api.alpaca.markets"
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Alpaca REST")
 @pytest.mark.asyncio
 async def test_submit_order_returns_parsed_alpaca_order_on_success() -> None:
     """A successful POST /v2/orders MUST parse the JSON body into an
@@ -69,7 +68,6 @@ async def test_submit_order_returns_parsed_alpaca_order_on_success() -> None:
     assert order.status == "accepted"
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Alpaca REST")
 @pytest.mark.asyncio
 async def test_submit_order_raises_alpaca_error_on_4xx() -> None:
     """A 4xx response from Alpaca MUST raise :class:`AlpacaError`
@@ -94,7 +92,6 @@ async def test_submit_order_raises_alpaca_error_on_4xx() -> None:
             assert "insufficient buying power" in (excinfo.value.venue_body or "")
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Alpaca REST")
 @pytest.mark.asyncio
 async def test_submit_order_sends_client_order_id_in_body() -> None:
     """The client_order_id MUST be in the request body so Alpaca can
@@ -129,7 +126,6 @@ async def test_submit_order_sends_client_order_id_in_body() -> None:
     assert captured["side"] == "buy"
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Alpaca REST")
 @pytest.mark.asyncio
 async def test_submit_order_rejects_oversized_client_order_id() -> None:
     """ADR-0009 mandates the leading 48 chars of compute_idempotency_key's
@@ -145,7 +141,6 @@ async def test_submit_order_rejects_oversized_client_order_id() -> None:
             )
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Alpaca REST")
 @pytest.mark.asyncio
 async def test_cancel_all_orders_does_not_raise_on_2xx() -> None:
     """DELETE /v2/orders is the kill-switch primitive. 2xx (any) MUST

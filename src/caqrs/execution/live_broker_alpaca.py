@@ -36,19 +36,25 @@ import os
 from decimal import Decimal
 from typing import TextIO
 
+from caqrs.execution.alpaca_rest import AlpacaError, AlpacaRestClient
 from caqrs.execution.execution_report import (
     ExecutionReport,
     ExecutionStatus,
+    Fill,
+    FillStatus,
 )
 from caqrs.execution.paper_broker import PaperBroker
 from caqrs.orchestrator.event_log import EventLog
 from caqrs.orchestrator.events import (
     broker_live_kill_switch_event,
     broker_live_rejected_event,
+    broker_live_submitted_event,
 )
 from caqrs.policy.gateway import FeasibleAction
 from caqrs.schemas.common import Ticker
 from caqrs.schemas.decision import Side
+
+_CLIENT_ORDER_ID_TRUNCATION = 48  # Alpaca-documented client_order_id length cap (ADR-0009)
 
 
 class LiveBrokerAlpaca:
@@ -74,6 +80,7 @@ class LiveBrokerAlpaca:
         *,
         paper_broker: PaperBroker,
         live_broker_daily_loss_cap_usd: Decimal,
+        alpaca_client: AlpacaRestClient | None = None,
         _force_enable_live_orders_for_test: bool = False,
     ) -> None:
         """Construct a LiveBrokerAlpaca in default-off, no-context state.
@@ -101,6 +108,7 @@ class LiveBrokerAlpaca:
             )
             raise ValueError(msg)
         self._paper_broker = paper_broker
+        self._alpaca_client = alpaca_client
         self._cycle_id: str | None = None
         self._event_log: EventLog | None = None
         self.enable_live_orders: bool = _force_enable_live_orders_for_test
@@ -365,14 +373,104 @@ class LiveBrokerAlpaca:
                 fills=(),
                 reason=full_reason,
             )
-        # Alpaca submission path — deferred to follow-up PR per ADR-0009.
-        # Reaching here requires (kill_switch=False AND enable_live_orders=True
-        # AND paper pre-flight FILLED), all explicit operator decisions.
-        msg = (
-            "live Alpaca submission deferred to follow-up PR; "
-            "ADR-0009 §'Implementation checklist' tracks the alpaca-py wiring"
+        # Alpaca submission path — reaching here requires
+        # (kill_switch=False AND enable_live_orders=True AND paper
+        # pre-flight FILLED), all explicit operator decisions.
+        if self._alpaca_client is None:
+            msg = (
+                "LiveBrokerAlpaca constructed without alpaca_client; cannot "
+                "submit live orders. Pass alpaca_client=AlpacaRestClient.from_env() "
+                "or its equivalent to enable submission."
+            )
+            raise RuntimeError(msg)
+        return await self._submit_to_alpaca(
+            action=action,
+            paper_report=paper_report,
+            prices=prices,
         )
-        raise NotImplementedError(msg)
+
+    async def _submit_to_alpaca(
+        self,
+        *,
+        action: FeasibleAction,
+        paper_report: ExecutionReport,
+        prices: dict[Ticker, Decimal],
+    ) -> ExecutionReport:
+        """Submit each FILLED entry in ``paper_report`` to Alpaca via
+        :class:`AlpacaRestClient`. Aborts on the first venue rejection
+        (returns REJECTED + emits BROKER_LIVE_REJECTED); on success
+        returns FILLED with placeholder fill prices and emits
+        BROKER_LIVE_SUBMITTED per accepted order.
+
+        ``client_order_id`` is the leading 48 chars of
+        :meth:`compute_idempotency_key`'s 64-char digest per ADR-0009;
+        the full 64-char key is logged on the BROKER_LIVE_SUBMITTED
+        payload so replay disambiguation is recoverable post-hoc.
+        """
+        assert self._alpaca_client is not None  # narrowed by caller
+        live_fills: list[Fill] = []
+        for paper_fill in paper_report.fills:
+            if paper_fill.status is not FillStatus.FILLED:
+                continue
+            full_key = self.compute_idempotency_key(
+                cycle_id=self._cycle_id or "",
+                decision_run_id=action.source_decision_run_id,
+                ticker=paper_fill.ticker,
+                side=paper_fill.side,
+                quantity=paper_fill.quantity,
+            )
+            client_order_id = full_key[:_CLIENT_ORDER_ID_TRUNCATION]
+            try:
+                order = await self._alpaca_client.submit_order(
+                    symbol=paper_fill.ticker,
+                    qty=paper_fill.quantity,
+                    side=paper_fill.side,
+                    client_order_id=client_order_id,
+                )
+            except AlpacaError as exc:
+                reason = f"Alpaca rejected {paper_fill.ticker} {paper_fill.side.value}: {exc}"
+                self._emit_rejected(
+                    decision_run_id=action.source_decision_run_id,
+                    reason=reason,
+                )
+                return ExecutionReport(
+                    source_decision_run_id=action.source_decision_run_id,
+                    status=ExecutionStatus.REJECTED,
+                    fills=tuple(live_fills),
+                    reason=reason,
+                )
+            self._emit_submitted(
+                decision_run_id=action.source_decision_run_id,
+                order_id=order.order_id,
+                client_order_id=order.client_order_id,
+                idempotency_key=full_key,
+                symbol=order.symbol,
+                qty=order.qty,
+                side=paper_fill.side,
+            )
+            # Placeholder fill: actual fill price + qty come from the
+            # websocket trade-update stream (next slice). For now record
+            # the requested qty and the price from the gateway-side
+            # snapshot so downstream consumers see something non-zero.
+            placeholder_price = prices.get(paper_fill.ticker, Decimal(0))
+            live_fills.append(
+                Fill(
+                    ticker=paper_fill.ticker,
+                    side=paper_fill.side,
+                    status=FillStatus.FILLED,
+                    quantity=order.qty,
+                    fill_price_usd=placeholder_price,
+                    notional_usd=order.qty * placeholder_price,
+                    reason="venue submission accepted; actual fill price "
+                    "via BROKER_LIVE_FILLED event (websocket — next slice)",
+                ),
+            )
+        return ExecutionReport(
+            source_decision_run_id=action.source_decision_run_id,
+            status=ExecutionStatus.FILLED,
+            fills=tuple(live_fills),
+            reason=None,
+        )
 
     # --- internal: BROKER_LIVE_* event emission -----------------------------
 
@@ -389,6 +487,32 @@ class LiveBrokerAlpaca:
                 cycle_id=self._cycle_id,
                 decision_run_id=decision_run_id,
                 reason=reason,
+            ),
+        )
+
+    def _emit_submitted(
+        self,
+        *,
+        decision_run_id: str,
+        order_id: str,
+        client_order_id: str,
+        idempotency_key: str,
+        symbol: str,
+        qty: Decimal,
+        side: Side,
+    ) -> None:
+        if self._event_log is None or self._cycle_id is None:
+            return
+        self._event_log.append(
+            broker_live_submitted_event(
+                cycle_id=self._cycle_id,
+                decision_run_id=decision_run_id,
+                order_id=order_id,
+                client_order_id=client_order_id,
+                idempotency_key=idempotency_key,
+                symbol=symbol,
+                qty=str(qty),
+                side=side.value,
             ),
         )
 
