@@ -48,6 +48,13 @@ yfinance = ["yfinance>=0.2.40,<1"]
 # caqrs[entities].
 entities = ["duckdb>=1.0,<2"]
 
+# Live-broker stack: Alpaca trade-update websocket subscriber.
+# Install with: pip install caqrs[live-broker]. Required only when
+# wiring the production-side trade_updates_stream() consumer; paper-
+# only / unit-test deployments don't need it. Per ADR-0008 the live
+# broker is default-off; this dep group does not flip that gate.
+live-broker = ["websockets>=15.0,<17"]
+
 [project.urls]
 Homepage = "https://github.com/niraiarin/caqrs"
 Issues = "https://github.com/niraiarin/caqrs/issues"
