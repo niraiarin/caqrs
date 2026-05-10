@@ -43,6 +43,7 @@ from caqrs.execution.execution_report import (
     Fill,
     FillStatus,
 )
+from caqrs.execution.live_broker_journal import LiveBrokerJournal
 from caqrs.execution.paper_broker import PaperBroker
 from caqrs.orchestrator.event_log import EventLog
 from caqrs.orchestrator.events import (
@@ -81,6 +82,7 @@ class LiveBrokerAlpaca:
         paper_broker: PaperBroker,
         live_broker_daily_loss_cap_usd: Decimal,
         alpaca_client: AlpacaRestClient | None = None,
+        journal: LiveBrokerJournal | None = None,
         _force_enable_live_orders_for_test: bool = False,
     ) -> None:
         """Construct a LiveBrokerAlpaca in default-off, no-context state.
@@ -109,6 +111,7 @@ class LiveBrokerAlpaca:
             raise ValueError(msg)
         self._paper_broker = paper_broker
         self._alpaca_client = alpaca_client
+        self._journal = journal
         self._cycle_id: str | None = None
         self._event_log: EventLog | None = None
         self.enable_live_orders: bool = _force_enable_live_orders_for_test
@@ -463,6 +466,24 @@ class LiveBrokerAlpaca:
                     status=ExecutionStatus.REJECTED,
                     fills=(),
                     reason=reason,
+                )
+            # Per Codex audit PR #99 majors 3+4: persist the
+            # submission to the durable journal BEFORE emitting the
+            # event log entry, so the journal is always at-least-as-
+            # consistent as the event log under crash semantics
+            # (event log alone could survive while a same-cycle crash
+            # loses the journal's commit). When journal is None the
+            # broker runs in audit-only mode (existing test fixtures).
+            if self._journal is not None:
+                self._journal.register_submission(
+                    client_order_id=order.client_order_id,
+                    cycle_id=self._cycle_id or "",
+                    decision_run_id=action.source_decision_run_id,
+                    order_id=order.order_id,
+                    idempotency_key=full_key,
+                    symbol=order.symbol,
+                    side=paper_fill.side.value,
+                    qty=order.qty,
                 )
             self._emit_submitted(
                 decision_run_id=action.source_decision_run_id,

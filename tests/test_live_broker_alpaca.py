@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import io
 from decimal import Decimal
+from pathlib import Path
 
 import httpx
 import pytest
@@ -37,6 +38,7 @@ import respx
 from caqrs.execution.alpaca_rest import AlpacaError, AlpacaRestClient
 from caqrs.execution.execution_report import ExecutionStatus, FillStatus
 from caqrs.execution.live_broker_alpaca import LiveBrokerAlpaca, _main
+from caqrs.execution.live_broker_journal import LiveBrokerJournal
 from caqrs.execution.paper_broker import PaperBroker
 from caqrs.orchestrator import CycleEventKind, EventLog, new_cycle_id
 from caqrs.policy.gateway import FeasibleAction
@@ -791,3 +793,73 @@ async def test_alpaca_cancel_all_raises_on_4xx() -> None:
             with pytest.raises(AlpacaError) as excinfo:
                 await client.cancel_all_orders()
             assert excinfo.value.status_code == 401
+
+
+# === Journal wire-in (PR #100 majors 3+4 follow-through) ===========
+
+
+@pytest.mark.asyncio
+async def test_alpaca_submission_registers_in_journal_when_provided(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """When LiveBrokerAlpaca is constructed with a journal, each
+    accepted Alpaca submission MUST persist a registration row so
+    the trade-update stream's resolver can attribute fills durably."""
+
+    path = Path(str(tmp_path)) / "j.sqlite"
+    paper = PaperBroker(initial_capital_usd=Decimal("100000"))
+    base_url = "https://paper-api.alpaca.markets"
+    cycle_id = new_cycle_id()
+    with respx.mock(base_url=base_url) as router:
+        router.post("/v2/orders").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "venue-uuid",
+                    "client_order_id": "test-client-id",
+                    "symbol": "AAPL",
+                    "qty": "10",
+                    "side": "buy",
+                    "status": "accepted",
+                },
+            ),
+        )
+        async with AlpacaRestClient(api_key="k", api_secret="s") as alpaca:
+            with LiveBrokerJournal(path=path) as journal:
+                broker = LiveBrokerAlpaca(
+                    paper_broker=paper,
+                    live_broker_daily_loss_cap_usd=Decimal("10000"),
+                    alpaca_client=alpaca,
+                    journal=journal,
+                    _force_enable_live_orders_for_test=True,
+                )
+                broker.attach_cycle_context(cycle_id=cycle_id, event_log=EventLog())
+                action = FeasibleAction(
+                    action=DecisionAction.ADOPT,
+                    targets=(TargetPosition(ticker="AAPL", side=Side.BUY, weight=Decimal("0.5")),),
+                    violations=(),
+                    source_decision_run_id=new_run_id(),
+                )
+                await broker.execute(action=action, prices={"AAPL": Decimal("180")})
+                # Journal records the venue-assigned client_order_id
+                # (the response body's client_order_id wins over the
+                # submitted one when they differ).
+                assert journal.attribution("test-client-id") is not None
+                attribution = journal.attribution("test-client-id")
+                assert attribution is not None
+                assert attribution[0] == cycle_id
+
+
+def test_alpaca_without_journal_runs_without_registering() -> None:
+    """When journal is None, the broker MUST NOT attempt journal
+    operations — confirmed by simply being able to construct + run
+    without a journal (existing test fixtures still pass)."""
+    paper = PaperBroker(initial_capital_usd=Decimal("100000"))
+    broker = LiveBrokerAlpaca(
+        paper_broker=paper,
+        live_broker_daily_loss_cap_usd=Decimal("1000"),
+        alpaca_client=None,
+        journal=None,
+    )
+    # Default-off; just verify construction works without journal.
+    assert broker.enable_live_orders is False

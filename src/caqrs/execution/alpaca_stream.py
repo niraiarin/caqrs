@@ -44,8 +44,12 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from caqrs.orchestrator.event_log import EventLog
+
+if TYPE_CHECKING:
+    from caqrs.execution.live_broker_journal import LiveBrokerJournal
 from caqrs.orchestrator.events import (
     broker_live_cancelled_event,
     broker_live_filled_event,
@@ -170,17 +174,39 @@ async def consume(
     messages: AsyncIterator[dict[str, object]],
     *,
     event_log: EventLog,
-    cycle_id_resolver: CycleIdResolver,
-    decision_run_id_resolver: CycleIdResolver,
+    journal: LiveBrokerJournal | None = None,
+    cycle_id_resolver: CycleIdResolver | None = None,
+    decision_run_id_resolver: CycleIdResolver | None = None,
 ) -> None:
     """Drain ``messages`` and emit one ``BROKER_LIVE_*`` event per
     decoded trade-update.
+
+    Resolver wiring (one of two paths is required):
+
+    - Pass ``journal=`` and the resolvers default to
+      :meth:`~caqrs.execution.live_broker_journal.LiveBrokerJournal.make_resolvers`.
+      The journal also receives :meth:`record_fill` /
+      :meth:`record_cancel` calls per event for durable persistence.
+    - Pass explicit ``cycle_id_resolver=`` + ``decision_run_id_resolver=``
+      for tests that don't need a journal. Both must be non-None.
+
+    Passing ``journal=`` alongside explicit resolvers uses the
+    explicit ones (testing escape hatch); the journal still receives
+    durability calls.
 
     Returns when the iterator exhausts (production: never; tests: at
     end of the synthetic stream). Cancelling the surrounding task is
     the operator's shutdown signal; this function does not handle
     reconnection.
     """
+    if cycle_id_resolver is None and decision_run_id_resolver is None and journal is not None:
+        cycle_id_resolver, decision_run_id_resolver = journal.make_resolvers()
+    if cycle_id_resolver is None or decision_run_id_resolver is None:
+        msg = (
+            "consume() requires either journal= OR both cycle_id_resolver= "
+            "and decision_run_id_resolver="
+        )
+        raise ValueError(msg)
     async for raw in messages:
         try:
             update = decode_trade_update(raw)
@@ -205,6 +231,21 @@ async def consume(
             # the assert is for mypy narrowing, not runtime defence.
             assert update.filled_qty is not None
             assert update.filled_avg_price is not None
+            # Persist BEFORE emitting the event (Codex PR #100
+            # consistency note): journal state is at-least-as-fresh as
+            # the in-memory event log.
+            if journal is not None:
+                journal.record_fill(
+                    client_order_id=update.client_order_id,
+                    qty=update.filled_qty,
+                    fill_price_usd=update.filled_avg_price,
+                    is_partial=update.kind is TradeUpdateKind.PARTIAL_FILL,
+                    # fill_id parsing deferred — Alpaca's execution_id
+                    # field will land in a follow-up. Until then the
+                    # journal stores fills audit-only (no dedup) per
+                    # PR #100's docstring contract.
+                    fill_id=None,
+                )
             event_log.append(
                 broker_live_filled_event(
                     cycle_id=cycle_id,
@@ -220,6 +261,11 @@ async def consume(
             )
         else:
             # CANCELED or REJECTED
+            if journal is not None:
+                journal.record_cancel(
+                    client_order_id=update.client_order_id,
+                    reason=update.reason,
+                )
             event_log.append(
                 broker_live_cancelled_event(
                     cycle_id=cycle_id,
