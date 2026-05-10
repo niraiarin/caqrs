@@ -123,6 +123,11 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["ANN", "ARG", "PLR2004", "PT011"]
+# Operator scripts (manually-triggered live smoke utilities) tend to
+# be linear top-to-bottom flows: env validation, setup, submission,
+# teardown. Splitting into PLR0911/0915-compliant helpers obscures
+# the operator-readable narrative without buying type safety.
+"scripts/**/*.py" = ["PLR0911", "PLR0915"]
 
 [tool.ruff.format]
 quote-style = "double"
