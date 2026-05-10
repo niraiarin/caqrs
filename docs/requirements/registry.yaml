@@ -3006,8 +3006,10 @@ requirements:
       - path: tests/test_live_broker_alpaca.py
         names:
           - test_execute_skips_when_paper_pre_flight_rejects
-    status: partial
-    notes: "PR #92 LiveBrokerAlpaca.execute() runs PaperBroker.execute() before any submission. The rejection-side (paper non-FILLED → live skips with BROKER_LIVE_REJECTED) is gated. The FILLED-pass-through-to-Alpaca side cannot be exercised end-to-end until the alpaca-py SDK integration lands (the Alpaca submission path currently raises NotImplementedError)."
+          - test_paper_pre_flight_rejection_emits_broker_live_rejected
+          - test_alpaca_submission_emits_broker_live_submitted
+    status: formalized
+    notes: "PR #92 LiveBrokerAlpaca.execute() runs PaperBroker.execute() before any submission. The rejection-side (paper non-FILLED → live skips with BROKER_LIVE_REJECTED) is fully evidenced: status SKIPPED via test_execute_skips_when_paper_pre_flight_rejects, event emission via test_paper_pre_flight_rejection_emits_broker_live_rejected (Codex PR #104 review). The FILLED-pass-through-to-Alpaca side now exercises end-to-end: PR #97 wires the Alpaca REST submission and emits BROKER_LIVE_SUBMITTED (test_alpaca_submission_emits_broker_live_submitted), PR #101 threads the durable journal so submission attribution survives restart, and PR #102 dedups duplicate fills via execution_id. Status flipped from partial to formalized after the FILLED → BROKER_LIVE_SUBMITTED → record_submission → BROKER_LIVE_FILLED chain proved out."
   - id: NFR-LIVE-BROKER-4
     kind: non-functional
     subsystem: execution
@@ -3116,5 +3118,17 @@ requirements:
           - test_execute_emits_broker_live_rejected_when_short_circuiting
           - test_kill_switch_emits_broker_live_kill_switch_event
           - test_cap_breach_emits_broker_live_kill_switch_with_cap_breach_reason
-    status: partial
-    notes: "PR #92 ships 5 BROKER_LIVE_* enum members + 2 typed constructors (broker_live_rejected_event, broker_live_kill_switch_event). LiveBrokerAlpaca emits BROKER_LIVE_REJECTED on every short-circuit (kill-switch / default-off / paper pre-flight) and BROKER_LIVE_KILL_SWITCH on engage. The SUBMITTED/FILLED/CANCELLED half awaits the Alpaca SDK integration; until then the constructors exist but are unused."
+          - test_alpaca_submission_emits_broker_live_submitted
+          - test_paper_pre_flight_rejection_emits_broker_live_rejected
+      - path: tests/test_orchestrator_paper_broker.py
+        names:
+          - test_live_broker_emits_broker_live_rejected_with_runner_cycle_id
+          - test_live_broker_kill_switch_engaged_emits_rejected_not_executed
+      - path: tests/test_alpaca_stream.py
+        names:
+          - test_consume_emits_broker_live_filled_for_fill_event
+          - test_consume_emits_broker_live_cancelled_for_canceled_event
+          - test_consume_suppresses_duplicate_fill_emission
+          - test_consume_suppresses_duplicate_cancel_emission
+    status: formalized
+    notes: "PR #92 ships 5 BROKER_LIVE_* enum members + 2 typed constructors (broker_live_rejected_event, broker_live_kill_switch_event). LiveBrokerAlpaca emits BROKER_LIVE_REJECTED on every short-circuit (kill-switch / default-off / paper pre-flight) and BROKER_LIVE_KILL_SWITCH on engage. The SUBMITTED/FILLED/CANCELLED half is now wired: PR #97 emits BROKER_LIVE_SUBMITTED post-Alpaca-submit, PR #98 emits BROKER_LIVE_FILLED + BROKER_LIVE_CANCELLED via the trade-update stream consumer, PR #102 dedups fills on (client_order_id, execution_id), PR #103 dedups cancels on client_order_id. Terminal-event exactly-once guaranteed; status flipped from partial to formalized."
