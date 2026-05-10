@@ -204,7 +204,6 @@ def test_record_cancel_with_null_reason() -> None:
         journal.record_cancel(client_order_id="abc", reason=None)
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #15 cancel-side dedup")
 def test_record_cancel_dedups_duplicate_delivery() -> None:
     """Codex PR #102 finding 1: Alpaca's trade-update stream delivers
     cancellations at-least-once. record_cancel MUST return True on
@@ -238,7 +237,6 @@ def test_record_cancel_dedups_duplicate_delivery() -> None:
         assert cur.fetchone()[0] == 1
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #15 cancel-side dedup")
 def test_record_cancel_distinct_orders_both_recorded() -> None:
     """Two genuine cancellations for different orders MUST both
     insert and both return True — dedup keys on client_order_id, not

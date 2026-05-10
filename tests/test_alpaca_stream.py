@@ -412,7 +412,6 @@ async def test_consume_suppresses_duplicate_fill_emission(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #15 cancel-side dedup")
 async def test_consume_suppresses_duplicate_cancel_emission(
     tmp_path: pytest.TempPathFactory,
 ) -> None:
