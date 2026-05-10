@@ -265,14 +265,28 @@ class LiveBrokerJournal:
         *,
         client_order_id: str,
         reason: str | None,
-    ) -> None:
-        """Append one cancellation record."""
+    ) -> bool:
+        """Append one cancellation record. Returns ``True`` if newly
+        inserted, ``False`` if a cancellation for ``client_order_id``
+        was already on file — Alpaca's at-least-once webhook delivery
+        means the same canceled event may arrive twice (Codex PR #102
+        finding 1). An order can only reach one terminal cancel state,
+        so ``client_order_id`` alone is the dedup key (no ``cancel_id``
+        analog to ``execution_id`` is delivered by Alpaca).
+        """
         with self._lock:
+            cur = self._conn.execute(
+                "SELECT 1 FROM cancellations WHERE client_order_id = ? LIMIT 1",
+                (client_order_id,),
+            )
+            if cur.fetchone() is not None:
+                return False
             self._conn.execute(
                 "INSERT INTO cancellations (client_order_id, reason, recorded_at) VALUES (?, ?, ?)",
                 (client_order_id, reason, time.time()),
             )
             self._conn.commit()
+            return True
 
     # --- read surface -----------------------------------------------------
 

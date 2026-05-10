@@ -275,12 +275,18 @@ async def consume(
                 ),
             )
         else:
-            # CANCELED or REJECTED
+            # CANCELED or REJECTED. Symmetric to fills: when the
+            # journal returns False (duplicate cancellation), skip
+            # event_log.append so downstream cycle consumers see
+            # exactly one BROKER_LIVE_CANCELLED — Codex PR #102
+            # finding 1.
             if journal is not None:
-                journal.record_cancel(
+                inserted = journal.record_cancel(
                     client_order_id=update.client_order_id,
                     reason=update.reason,
                 )
+                if not inserted:
+                    continue
             event_log.append(
                 broker_live_cancelled_event(
                     cycle_id=cycle_id,
