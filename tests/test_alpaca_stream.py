@@ -335,6 +335,17 @@ def test_decode_trade_update_fill_id_none_when_absent() -> None:
     assert parsed.fill_id is None
 
 
+def test_decode_trade_update_fill_id_none_on_empty_execution_id() -> None:
+    """Codex PR #102 nitpick: an empty-string ``execution_id`` falls
+    back to audit-only insert rather than dropping the message — losing
+    a real fill is more dangerous than recording one without dedup."""
+    msg = _fill_msg(execution_id=None)
+    msg["data"]["execution_id"] = ""  # type: ignore[index]
+    parsed = decode_trade_update(msg)
+    assert parsed is not None
+    assert parsed.fill_id is None
+
+
 @pytest.mark.asyncio
 async def test_consume_passes_execution_id_to_journal_record_fill(
     tmp_path: pytest.TempPathFactory,
