@@ -46,6 +46,10 @@ from decimal import Decimal
 from enum import StrEnum
 
 from caqrs.orchestrator.event_log import EventLog
+from caqrs.orchestrator.events import (
+    broker_live_cancelled_event,
+    broker_live_filled_event,
+)
 
 
 class TradeUpdateKind(StrEnum):
@@ -101,8 +105,48 @@ def decode_trade_update(raw: dict[str, object]) -> AlpacaTradeUpdate | None:
     Robust to missing optional fields. Returns ``None`` for any
     ``data.event`` that isn't in :class:`TradeUpdateKind`.
     """
-    raise NotImplementedError(
-        "Alpaca websocket step 1 placeholder; decode impl in step 2",
+    data = raw.get("data")
+    if not isinstance(data, dict):
+        return None
+    event_name = data.get("event")
+    if not isinstance(event_name, str):
+        return None
+    try:
+        kind = TradeUpdateKind(event_name)
+    except ValueError:
+        return None
+    order = data.get("order")
+    if not isinstance(order, dict):
+        return None
+    order_id = str(order.get("id", ""))
+    client_order_id = str(order.get("client_order_id", ""))
+    symbol = str(order.get("symbol", ""))
+    side = str(order.get("side", ""))
+    if not (order_id and client_order_id and symbol and side):
+        return None
+    filled_qty: Decimal | None = None
+    filled_avg_price: Decimal | None = None
+    if kind in {TradeUpdateKind.FILL, TradeUpdateKind.PARTIAL_FILL}:
+        qty_raw = data.get("qty")
+        price_raw = data.get("price")
+        if qty_raw is not None:
+            filled_qty = Decimal(str(qty_raw))
+        if price_raw is not None:
+            filled_avg_price = Decimal(str(price_raw))
+    reason: str | None = None
+    if kind in {TradeUpdateKind.CANCELED, TradeUpdateKind.REJECTED}:
+        reason_raw = data.get("reason")
+        if isinstance(reason_raw, str):
+            reason = reason_raw
+    return AlpacaTradeUpdate(
+        kind=kind,
+        order_id=order_id,
+        client_order_id=client_order_id,
+        symbol=symbol,
+        side=side,
+        filled_qty=filled_qty,
+        filled_avg_price=filled_avg_price,
+        reason=reason,
     )
 
 
@@ -128,6 +172,38 @@ async def consume(
     the operator's shutdown signal; this function does not handle
     reconnection.
     """
-    raise NotImplementedError(
-        "Alpaca websocket step 1 placeholder; consume impl in step 2",
-    )
+    async for raw in messages:
+        update = decode_trade_update(raw)
+        if update is None:
+            continue  # silently drop unrelated events
+        cycle_id = cycle_id_resolver(update.client_order_id)
+        decision_run_id = decision_run_id_resolver(update.client_order_id)
+        if cycle_id is None or decision_run_id is None:
+            continue  # the broker didn't submit this in our process
+        if update.kind in {TradeUpdateKind.FILL, TradeUpdateKind.PARTIAL_FILL}:
+            event_log.append(
+                broker_live_filled_event(
+                    cycle_id=cycle_id,
+                    decision_run_id=decision_run_id,
+                    order_id=update.order_id,
+                    client_order_id=update.client_order_id,
+                    symbol=update.symbol,
+                    side=update.side,
+                    filled_qty=str(update.filled_qty or Decimal(0)),
+                    filled_avg_price_usd=str(update.filled_avg_price or Decimal(0)),
+                    is_partial=update.kind is TradeUpdateKind.PARTIAL_FILL,
+                ),
+            )
+        else:
+            # CANCELED or REJECTED
+            event_log.append(
+                broker_live_cancelled_event(
+                    cycle_id=cycle_id,
+                    decision_run_id=decision_run_id,
+                    order_id=update.order_id,
+                    client_order_id=update.client_order_id,
+                    symbol=update.symbol,
+                    side=update.side,
+                    reason=update.reason,
+                ),
+            )

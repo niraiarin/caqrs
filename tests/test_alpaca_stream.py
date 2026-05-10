@@ -89,7 +89,6 @@ def _unrelated_msg() -> dict[str, object]:
     }
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Alpaca stream")
 def test_decode_trade_update_handles_fill_message() -> None:
     parsed = decode_trade_update(_fill_msg())
     assert parsed is not None
@@ -102,7 +101,6 @@ def test_decode_trade_update_handles_fill_message() -> None:
     assert parsed.filled_avg_price == Decimal("180.50")
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Alpaca stream")
 def test_decode_trade_update_handles_partial_fill_message() -> None:
     parsed = decode_trade_update(_partial_fill_msg())
     assert parsed is not None
@@ -110,7 +108,6 @@ def test_decode_trade_update_handles_partial_fill_message() -> None:
     assert parsed.filled_qty == Decimal("3")
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Alpaca stream")
 def test_decode_trade_update_handles_canceled_message() -> None:
     parsed = decode_trade_update(_canceled_msg())
     assert parsed is not None
@@ -119,7 +116,6 @@ def test_decode_trade_update_handles_canceled_message() -> None:
     assert parsed.filled_qty is None
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Alpaca stream")
 def test_decode_trade_update_returns_none_for_unrelated_event() -> None:
     """Events outside the four taxonomy-mapped kinds (new,
     done_for_day, replaced, ...) MUST decode to None — the cycle
@@ -132,7 +128,6 @@ async def _async_iter(messages: list[dict[str, object]]) -> AsyncIterator[dict[s
         yield m
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Alpaca stream")
 @pytest.mark.asyncio
 async def test_consume_emits_broker_live_filled_for_fill_event() -> None:
     """A fill event with a known client_order_id MUST emit
@@ -157,7 +152,6 @@ async def test_consume_emits_broker_live_filled_for_fill_event() -> None:
     assert payload["is_partial"] is False
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Alpaca stream")
 @pytest.mark.asyncio
 async def test_consume_emits_broker_live_cancelled_for_canceled_event() -> None:
     log = EventLog()
@@ -172,7 +166,6 @@ async def test_consume_emits_broker_live_cancelled_for_canceled_event() -> None:
     assert cancelled[0].payload["reason"] == "operator-initiated cancel"
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Alpaca stream")
 @pytest.mark.asyncio
 async def test_consume_drops_unresolvable_client_order_ids() -> None:
     """If the resolver returns None (this process didn't submit the
@@ -188,7 +181,6 @@ async def test_consume_drops_unresolvable_client_order_ids() -> None:
     assert log.filter_by_kind(CycleEventKind.BROKER_LIVE_FILLED) == ()
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Alpaca stream")
 @pytest.mark.asyncio
 async def test_consume_silently_skips_unrelated_events() -> None:
     """Non-fill/cancel events (new, done_for_day, ...) MUST be
