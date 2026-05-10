@@ -44,12 +44,25 @@ file. Production deployments MUST pass one.
 from __future__ import annotations
 
 import sqlite3
+import threading
 import time
 from decimal import Decimal
 from pathlib import Path
 from types import TracebackType
 
 from caqrs.execution.alpaca_stream import CycleIdResolver
+
+# Schema version. Bumped any time _SCHEMA_SQL changes incompatibly.
+# A journal opened against a DB whose user_version is newer than this
+# (forward-incompatible upgrade) refuses to open; older versions
+# trigger the migration runner. Per Codex audit 2026-05-10 finding 2.
+_SCHEMA_VERSION = 1
+
+# How long a writer should wait on a busy lock before raising
+# "database is locked" — protects against transient contention
+# between the broker (submission inserts) and the stream consumer
+# (fill / cancel inserts) running on different threads.
+_BUSY_TIMEOUT_MS = 5000
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS submissions (
@@ -94,14 +107,57 @@ class LiveBrokerJournal:
     """
 
     def __init__(self, *, path: Path) -> None:
+        """Open or create the journal at ``path``.
+
+        Concurrency contract (Codex audit 2026-05-10 finding 1): the
+        connection is opened with ``check_same_thread=False`` AND
+        guarded by an internal :class:`threading.Lock`, so the
+        broker's submission writes and the stream's fill/cancel
+        writes can share one journal instance across threads. WAL
+        journal mode lets concurrent readers proceed without
+        blocking writers; ``busy_timeout`` provides a 5-second
+        retry window before raising ``database is locked``.
+
+        Schema versioning (Codex audit finding 2): the journal
+        records its schema version in ``PRAGMA user_version``.
+        Opening a database whose stored version is **higher** than
+        :data:`_SCHEMA_VERSION` raises — the operator MUST upgrade
+        CAQRS before that journal can be used safely. Older versions
+        run the migration runner (currently a no-op since v1 is
+        the first release).
+        """
         self._path = path
-        # SQLite "URI" mode lets ":memory:" stay independent across
-        # Connection objects when needed; default behaviour is fine
-        # for filesystem paths.
-        self._conn = sqlite3.connect(str(path))
-        # Row factory not needed — we query specific columns.
-        self._conn.executescript(_SCHEMA_SQL)
-        self._conn.commit()
+        self._conn = sqlite3.connect(
+            str(path),
+            check_same_thread=False,  # mediated by self._lock instead
+            timeout=_BUSY_TIMEOUT_MS / 1000,
+        )
+        self._lock = threading.Lock()
+        # File-backed databases benefit from WAL for concurrent
+        # readers; ":memory:" databases ignore the pragma silently.
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+        # Read existing schema version; create v1 schema on first
+        # open, refuse to open future versions.
+        cur = self._conn.execute("PRAGMA user_version")
+        existing_version = int(cur.fetchone()[0])
+        if existing_version > _SCHEMA_VERSION:
+            self._conn.close()
+            msg = (
+                f"LiveBrokerJournal at {path} has schema version "
+                f"{existing_version}, newer than this CAQRS build's "
+                f"supported version {_SCHEMA_VERSION}. Upgrade CAQRS "
+                "before opening this journal."
+            )
+            raise RuntimeError(msg)
+        if existing_version == 0:
+            # Fresh database — install v1 schema.
+            self._conn.executescript(_SCHEMA_SQL)
+            self._conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+            self._conn.commit()
+        # existing_version in (1, ..., _SCHEMA_VERSION): no migration
+        # needed yet (only v1 exists today). When future versions
+        # land, the migration runner branches off this point.
 
     def __enter__(self) -> LiveBrokerJournal:
         return self
@@ -138,24 +194,25 @@ class LiveBrokerJournal:
         Re-registering the same ``client_order_id`` is a programmer
         error (sha256 collisions are negligible) and raises
         :class:`sqlite3.IntegrityError` so the operator notices."""
-        self._conn.execute(
-            "INSERT INTO submissions "
-            "(client_order_id, cycle_id, decision_run_id, order_id, "
-            "idempotency_key, symbol, side, qty, submitted_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                client_order_id,
-                cycle_id,
-                decision_run_id,
-                order_id,
-                idempotency_key,
-                symbol,
-                side,
-                str(qty),
-                time.time(),
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO submissions "
+                "(client_order_id, cycle_id, decision_run_id, order_id, "
+                "idempotency_key, symbol, side, qty, submitted_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    client_order_id,
+                    cycle_id,
+                    decision_run_id,
+                    order_id,
+                    idempotency_key,
+                    symbol,
+                    side,
+                    str(qty),
+                    time.time(),
+                ),
+            )
+            self._conn.commit()
 
     def record_fill(
         self,
@@ -171,29 +228,37 @@ class LiveBrokerJournal:
         was suppressed — Alpaca's at-least-once webhook delivery means
         the same fill may arrive twice; the journal MUST collapse them.
 
-        When ``fill_id`` is ``None`` the row is always inserted (no
-        natural dedup key). Callers SHOULD persist Alpaca's
-        ``execution_id`` field as ``fill_id`` once that wiring lands;
-        the current PR-99 stream does not parse it (deferred follow-up).
+        When ``fill_id`` is ``None`` the row is **audit-only** —
+        every call inserts because SQL's UNIQUE constraint treats
+        ``NULL`` as not-equal-to-NULL, so duplicate webhook delivery
+        WILL produce duplicate rows. Per Codex audit 2026-05-10
+        finding 4, emission consumers MUST NOT rely on this method's
+        ``bool`` return for dedup decisions when ``fill_id`` is None
+        — fall back to ``(client_order_id, qty, fill_price_usd)``
+        equality is **explicitly unsafe** because legitimate partial
+        fills can share quantity and price. The next-slice wiring
+        MUST parse Alpaca's ``execution_id`` and supply it as
+        ``fill_id`` before relying on dedup.
         """
-        try:
-            self._conn.execute(
-                "INSERT INTO fills "
-                "(client_order_id, fill_id, qty, fill_price_usd, is_partial, recorded_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    client_order_id,
-                    fill_id,
-                    str(qty),
-                    str(fill_price_usd),
-                    1 if is_partial else 0,
-                    time.time(),
-                ),
-            )
-        except sqlite3.IntegrityError:
-            return False
-        self._conn.commit()
-        return True
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "INSERT INTO fills "
+                    "(client_order_id, fill_id, qty, fill_price_usd, is_partial, recorded_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        client_order_id,
+                        fill_id,
+                        str(qty),
+                        str(fill_price_usd),
+                        1 if is_partial else 0,
+                        time.time(),
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                return False
+            self._conn.commit()
+            return True
 
     def record_cancel(
         self,
@@ -202,11 +267,12 @@ class LiveBrokerJournal:
         reason: str | None,
     ) -> None:
         """Append one cancellation record."""
-        self._conn.execute(
-            "INSERT INTO cancellations (client_order_id, reason, recorded_at) VALUES (?, ?, ?)",
-            (client_order_id, reason, time.time()),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO cancellations (client_order_id, reason, recorded_at) VALUES (?, ?, ?)",
+                (client_order_id, reason, time.time()),
+            )
+            self._conn.commit()
 
     # --- read surface -----------------------------------------------------
 
