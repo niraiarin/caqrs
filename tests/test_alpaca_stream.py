@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -31,6 +32,7 @@ from caqrs.execution.alpaca_stream import (
     consume,
     decode_trade_update,
 )
+from caqrs.execution.live_broker_journal import LiveBrokerJournal
 from caqrs.orchestrator import CycleEventKind, EventLog
 
 
@@ -260,3 +262,82 @@ async def test_consume_continues_past_malformed_message() -> None:
     filled = log.filter_by_kind(CycleEventKind.BROKER_LIVE_FILLED)
     assert len(filled) == 1
     assert filled[0].payload["client_order_id"] == "good-id"
+
+
+# === Journal wire-in (PR #100 majors 3+4 follow-through) ===========
+
+
+@pytest.mark.asyncio
+async def test_consume_with_journal_records_fills_and_cancels(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """When journal= is passed, consume MUST persist record_fill +
+    record_cancel calls per event AND derive cycle_id_resolver +
+    decision_run_id_resolver from journal.make_resolvers()."""
+
+    path = Path(str(tmp_path)) / "j.sqlite"
+    log = EventLog()
+    with LiveBrokerJournal(path=path) as journal:
+        # Pre-register one submission so the resolver can attribute.
+        journal.register_submission(
+            client_order_id="abc123",
+            cycle_id="cycle-X",
+            decision_run_id="decision-Y",
+            order_id="venue-uuid-1",
+            idempotency_key="full-64-key",
+            symbol="AAPL",
+            side="buy",
+            qty=Decimal("10"),
+        )
+        await consume(
+            _async_iter([_fill_msg(), _canceled_msg()]),
+            event_log=log,
+            journal=journal,
+        )
+        # Cycle event log shows both events.
+        assert len(log.filter_by_kind(CycleEventKind.BROKER_LIVE_FILLED)) == 1
+        assert len(log.filter_by_kind(CycleEventKind.BROKER_LIVE_CANCELLED)) == 1
+        # Journal also persisted them — proven by direct sqlite read.
+        cur = journal._conn.execute("SELECT COUNT(*) FROM fills")
+        assert cur.fetchone()[0] == 1
+        cur = journal._conn.execute("SELECT COUNT(*) FROM cancellations")
+        assert cur.fetchone()[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_consume_without_journal_and_without_resolvers_raises() -> None:
+    """consume() requires either journal= OR explicit resolvers.
+    Neither → ValueError; better fail-fast than silently drop every
+    event."""
+    log = EventLog()
+    with pytest.raises(ValueError, match="journal="):
+        await consume(_async_iter([]), event_log=log)
+
+
+@pytest.mark.asyncio
+async def test_consume_explicit_resolver_takes_precedence_over_journal(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """When BOTH journal and explicit resolvers are passed, explicit
+    resolvers win. Use case: tests that want to override attribution
+    while still recording to the journal for restart-survival proofs."""
+
+    path = Path(str(tmp_path)) / "j.sqlite"
+    log = EventLog()
+    with LiveBrokerJournal(path=path) as journal:
+        # Journal has NO submission registered → its resolvers return None.
+        # Explicit resolver returns a value → consume should use it.
+        await consume(
+            _async_iter([_fill_msg()]),
+            event_log=log,
+            journal=journal,
+            cycle_id_resolver=lambda _: "explicit-cycle",
+            decision_run_id_resolver=lambda _: "explicit-decision",
+        )
+        # Event emitted with explicit attribution.
+        filled = log.filter_by_kind(CycleEventKind.BROKER_LIVE_FILLED)
+        assert len(filled) == 1
+        assert filled[0].cycle_id == "explicit-cycle"
+        # Journal still received the fill record (durability still on).
+        cur = journal._conn.execute("SELECT COUNT(*) FROM fills")
+        assert cur.fetchone()[0] == 1
