@@ -274,6 +274,98 @@ async def test_trade_updates_stream_backoff_doubles_until_ceiling() -> None:
     assert sleeps == [1.0, 2.0, 4.0]
 
 
+# === Codex PR #105 round 1 regressions ================================
+
+
+@pytest.mark.asyncio
+async def test_trade_updates_stream_drops_malformed_json_and_continues() -> None:
+    """Codex PR #105 minor 2: a single malformed JSON frame in the
+    middle of a healthy stream MUST NOT trigger reconnect or stop
+    iteration — drop and continue, mirroring
+    alpaca_stream.consume()'s defensive posture for downstream
+    parse failures."""
+    ws = _FakeWebSocket(
+        [
+            _auth_ok(),
+            _listening_ack(),
+            _trade_update("first", "1", "100.00"),
+            "{not valid json",  # malformed
+            _trade_update("second", "2", "101.00"),
+        ],
+    )
+    received: list[dict[str, object]] = [
+        msg
+        async for msg in trade_updates_stream(
+            api_key="K",
+            api_secret="S",
+            connect=_connect_factory([ws]),
+            initial_backoff_seconds=0.0,
+        )
+    ]
+    assert len(received) == 2
+    data_first = received[0]["data"]
+    assert isinstance(data_first, dict)
+    order_first = data_first["order"]
+    assert isinstance(order_first, dict)
+    assert order_first["client_order_id"] == "first"
+    data_second = received[1]["data"]
+    assert isinstance(data_second, dict)
+    order_second = data_second["order"]
+    assert isinstance(order_second, dict)
+    assert order_second["client_order_id"] == "second"
+
+
+@pytest.mark.asyncio
+async def test_trade_updates_stream_propagates_fatal_exceptions() -> None:
+    """Codex PR #105 round 1 major: a fatal programming/config error
+    (e.g. TypeError from a bad ws stub) MUST propagate out instead
+    of triggering an infinite reconnect loop. Only network-transport
+    errors are retryable."""
+    ws_bad = _FakeWebSocket(
+        [_auth_ok(), _listening_ack()],
+        raise_on_iter=TypeError("programmer error"),
+    )
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    with pytest.raises(TypeError, match="programmer error"):
+        async for _ in trade_updates_stream(
+            api_key="K",
+            api_secret="S",
+            connect=_connect_factory([ws_bad]),
+            initial_backoff_seconds=1.0,
+            sleep=fake_sleep,
+        ):
+            pass
+    # Fatal — no sleep, no retry attempted.
+    assert sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_trade_updates_stream_propagates_cancelled_error() -> None:
+    """Codex PR #105 minor 1: ``asyncio.CancelledError`` MUST
+    propagate out so task cancellation works correctly. The catch-all
+    must not swallow it (and ``CancelledError`` is a ``BaseException``
+    subclass, so ``except Exception`` correctly does not catch it —
+    this test is a regression guard against future edits that might
+    widen to ``BaseException``)."""
+    ws_cancelled = _FakeWebSocket(
+        [_auth_ok(), _listening_ack()],
+        raise_on_iter=asyncio.CancelledError(),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        async for _ in trade_updates_stream(
+            api_key="K",
+            api_secret="S",
+            connect=_connect_factory([ws_cancelled]),
+            initial_backoff_seconds=0.0,
+        ):
+            pass
+
+
 @pytest.mark.asyncio
 async def test_trade_updates_stream_resets_backoff_on_successful_auth() -> None:
     """A successful auth+subscribe handshake means the connection is

@@ -28,6 +28,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
+from json import JSONDecodeError
 from typing import Protocol
 
 # Default endpoints per Alpaca's docs; the live URL is opt-in via
@@ -61,6 +62,46 @@ ConnectFn = Callable[[str], AbstractAsyncContextManager[WebSocketLike]]
 
 SleepFn = Callable[[float], Awaitable[None]]
 """Async sleep injection for deterministic backoff testing."""
+
+
+# Transport-level errors that are always considered transient and
+# should trigger a reconnect with backoff. ``OSError`` covers DNS
+# resolution failures, refused connections, broken pipes; its
+# subclass ``ConnectionError`` makes that explicit. ``TimeoutError``
+# is the asyncio I/O timeout. ``EOFError`` is the websockets library's
+# raw-frame EOF signal. Per Codex PR #105 round 1: catching bare
+# ``Exception`` was too broad — fatal config / programming bugs were
+# silently retried forever instead of crashing loud.
+_RETRYABLE_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
+    OSError,
+    TimeoutError,
+    EOFError,
+)
+
+
+def _is_websockets_transient(exc: BaseException) -> bool:
+    """Detect retryable errors from the :mod:`websockets` library
+    without requiring it to be installed (live-broker is an optional
+    extra). Per the websockets docs, ``ConnectionClosed`` is always
+    transient (server / network closed the channel); ``InvalidStatus``
+    distinguishes 5xx (transient) from 4xx (fatal config). Any other
+    websockets exception (``InvalidURI``, ``InvalidHandshake``, etc.)
+    is treated as fatal so the operator sees the misconfiguration.
+    """
+    try:
+        from websockets.exceptions import (  # noqa: PLC0415 — late import for optional dep
+            ConnectionClosed,
+            InvalidStatus,
+        )
+    except ImportError:
+        return False
+    if isinstance(exc, ConnectionClosed):
+        return True
+    if isinstance(exc, InvalidStatus):
+        # 5xx → transient; 4xx → fatal config error.
+        status_code = getattr(exc, "status_code", 0)
+        return 500 <= status_code < 600  # noqa: PLR2004
+    return False
 
 
 async def trade_updates_stream(
@@ -132,17 +173,35 @@ async def trade_updates_stream(
                 # larger waits over the lifetime of the stream.
                 backoff = initial_backoff_seconds
                 async for raw in ws:
-                    yield json.loads(raw)
+                    try:
+                        msg = json.loads(raw)
+                    except JSONDecodeError:
+                        # A single malformed frame must not tear down
+                        # the stream (Codex PR #105 minor 2). Mirrors
+                        # alpaca_stream.consume()'s defensive posture
+                        # for malformed downstream events.
+                        continue
+                    yield msg
                 # Iterator ended cleanly (production: never; tests:
                 # the fake websocket exhausted). Treat as graceful
                 # termination so callers' `async for` returns.
                 return
         except AlpacaWebSocketAuthError:
             raise
-        except Exception:
+        except _RETRYABLE_TRANSPORT_ERRORS:
             await sleep(backoff)
             backoff = min(backoff * 2, max_backoff_seconds)
             continue
+        except Exception as exc:
+            if _is_websockets_transient(exc):
+                await sleep(backoff)
+                backoff = min(backoff * 2, max_backoff_seconds)
+                continue
+            # Fatal: programming bug, bad URL, 4xx handshake, etc.
+            # Re-raise so the operator sees the failure instead of
+            # silently spinning in a reconnect loop (Codex PR #105
+            # round 1 major).
+            raise
 
 
 def _auth_authorized(resp: object) -> bool:
