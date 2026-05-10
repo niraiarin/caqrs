@@ -412,6 +412,40 @@ async def test_consume_suppresses_duplicate_fill_emission(
 
 
 @pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason="impl pending — Task #15 cancel-side dedup")
+async def test_consume_suppresses_duplicate_cancel_emission(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """Codex PR #102 finding 1: when the same client_order_id's
+    canceled event arrives twice, record_cancel MUST return False on
+    the second call and consume MUST skip the second
+    BROKER_LIVE_CANCELLED emission. Without this fix, at-least-once
+    webhook delivery yielded duplicate terminal events downstream."""
+
+    path = Path(str(tmp_path)) / "j.sqlite"
+    log = EventLog()
+    with LiveBrokerJournal(path=path) as journal:
+        journal.register_submission(
+            client_order_id="abc123",
+            cycle_id="cycle-X",
+            decision_run_id="decision-Y",
+            order_id="venue-uuid-1",
+            idempotency_key="full-key",
+            symbol="AAPL",
+            side="buy",
+            qty=Decimal("10"),
+        )
+        msg1 = _canceled_msg()
+        msg2 = _canceled_msg()
+        await consume(_async_iter([msg1, msg2]), event_log=log, journal=journal)
+        # Journal: one row only.
+        cur = journal._conn.execute("SELECT COUNT(*) FROM cancellations")
+        assert cur.fetchone()[0] == 1
+        # EventLog: one event only.
+        assert len(log.filter_by_kind(CycleEventKind.BROKER_LIVE_CANCELLED)) == 1
+
+
+@pytest.mark.asyncio
 async def test_consume_emits_both_when_execution_ids_differ(
     tmp_path: pytest.TempPathFactory,
 ) -> None:

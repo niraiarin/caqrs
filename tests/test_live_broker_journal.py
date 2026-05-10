@@ -204,6 +204,63 @@ def test_record_cancel_with_null_reason() -> None:
         journal.record_cancel(client_order_id="abc", reason=None)
 
 
+@pytest.mark.xfail(strict=True, reason="impl pending — Task #15 cancel-side dedup")
+def test_record_cancel_dedups_duplicate_delivery() -> None:
+    """Codex PR #102 finding 1: Alpaca's trade-update stream delivers
+    cancellations at-least-once. record_cancel MUST return True on
+    first call and False on duplicate (same client_order_id) so the
+    stream consumer can suppress the duplicate BROKER_LIVE_CANCELLED
+    emission. An order can only reach one terminal cancel state, so
+    client_order_id alone is the dedup key."""
+    with _make_journal() as journal:
+        journal.register_submission(
+            client_order_id="abc",
+            cycle_id="c",
+            decision_run_id="d",
+            order_id="o",
+            idempotency_key="k",
+            symbol="AAPL",
+            side="buy",
+            qty=Decimal("10"),
+        )
+        first = journal.record_cancel(
+            client_order_id="abc",
+            reason="operator-initiated cancel",
+        )
+        second = journal.record_cancel(
+            client_order_id="abc",
+            reason="operator-initiated cancel",
+        )
+        assert first is True
+        assert second is False
+        # Only one row persisted.
+        cur = journal._conn.execute("SELECT COUNT(*) FROM cancellations")
+        assert cur.fetchone()[0] == 1
+
+
+@pytest.mark.xfail(strict=True, reason="impl pending — Task #15 cancel-side dedup")
+def test_record_cancel_distinct_orders_both_recorded() -> None:
+    """Two genuine cancellations for different orders MUST both
+    insert and both return True — dedup keys on client_order_id, not
+    on time or reason."""
+    with _make_journal() as journal:
+        for client_order_id in ("abc", "xyz"):
+            journal.register_submission(
+                client_order_id=client_order_id,
+                cycle_id="c",
+                decision_run_id="d",
+                order_id=f"o-{client_order_id}",
+                idempotency_key=f"k-{client_order_id}",
+                symbol="AAPL",
+                side="buy",
+                qty=Decimal("1"),
+            )
+        a = journal.record_cancel(client_order_id="abc", reason=None)
+        b = journal.record_cancel(client_order_id="xyz", reason=None)
+        assert a is True
+        assert b is True
+
+
 # --- restart simulation ---------------------------------------------------
 
 
