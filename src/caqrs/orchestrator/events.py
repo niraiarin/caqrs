@@ -339,6 +339,70 @@ def broker_live_rejected_event(
     )
 
 
+def broker_live_filled_event(
+    *,
+    cycle_id: str,
+    decision_run_id: str,
+    order_id: str,
+    client_order_id: str,
+    symbol: str,
+    side: str,
+    filled_qty: str,
+    filled_avg_price_usd: str,
+    is_partial: bool,
+) -> CycleEvent:
+    """ADR-0008 NFR-LIVE-BROKER-7: live broker emits this when the
+    venue confirms a fill (full or partial). ``is_partial`` is the
+    boolean reflecting Alpaca's ``event=partial_fill`` distinction;
+    downstream consumers can deduplicate fills against
+    ``order_id + filled_qty`` since at-least-once webhook delivery
+    means the same fill may arrive twice."""
+    return _build_event(
+        cycle_id=cycle_id,
+        kind=CycleEventKind.BROKER_LIVE_FILLED,
+        payload={
+            "decision_run_id": decision_run_id,
+            "order_id": order_id,
+            "client_order_id": client_order_id,
+            "symbol": symbol,
+            "side": side,
+            "filled_qty": filled_qty,
+            "filled_avg_price_usd": filled_avg_price_usd,
+            "is_partial": is_partial,
+        },
+    )
+
+
+def broker_live_cancelled_event(
+    *,
+    cycle_id: str,
+    decision_run_id: str,
+    order_id: str,
+    client_order_id: str,
+    symbol: str,
+    side: str,
+    reason: str | None = None,
+) -> CycleEvent:
+    """ADR-0008 NFR-LIVE-BROKER-7: live broker emits this when the
+    venue cancels an order (operator-initiated, kill-switch-initiated,
+    or venue-side rejection after acceptance). ``reason`` is the
+    venue's stated cause verbatim when available."""
+    payload: dict[str, Any] = {
+        "decision_run_id": decision_run_id,
+        "order_id": order_id,
+        "client_order_id": client_order_id,
+        "symbol": symbol,
+        "side": side,
+    }
+    if reason is not None:
+        payload["reason"] = reason
+    return _build_event(
+        cycle_id=cycle_id,
+        kind=CycleEventKind.BROKER_LIVE_CANCELLED,
+        payload=payload,
+    )
+
+
 def broker_live_kill_switch_event(
     *,
     cycle_id: str,
