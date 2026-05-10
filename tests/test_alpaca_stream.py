@@ -36,21 +36,21 @@ from caqrs.execution.live_broker_journal import LiveBrokerJournal
 from caqrs.orchestrator import CycleEventKind, EventLog
 
 
-def _fill_msg() -> dict[str, object]:
-    return {
-        "stream": "trade_updates",
-        "data": {
-            "event": "fill",
-            "order": {
-                "id": "venue-uuid-1",
-                "client_order_id": "abc123",
-                "symbol": "AAPL",
-                "side": "buy",
-            },
-            "qty": "10",
-            "price": "180.50",
+def _fill_msg(execution_id: str | None = "exec-1") -> dict[str, object]:
+    data: dict[str, object] = {
+        "event": "fill",
+        "order": {
+            "id": "venue-uuid-1",
+            "client_order_id": "abc123",
+            "symbol": "AAPL",
+            "side": "buy",
         },
+        "qty": "10",
+        "price": "180.50",
     }
+    if execution_id is not None:
+        data["execution_id"] = execution_id
+    return {"stream": "trade_updates", "data": data}
 
 
 def _partial_fill_msg() -> dict[str, object]:
@@ -312,6 +312,125 @@ async def test_consume_without_journal_and_without_resolvers_raises() -> None:
     log = EventLog()
     with pytest.raises(ValueError, match="journal="):
         await consume(_async_iter([]), event_log=log)
+
+
+# === execution_id dedup (PR #101 Codex finding 2 follow-through) ===
+
+
+@pytest.mark.xfail(strict=True, reason="impl pending — Task #12 execution_id parsing")
+def test_decode_trade_update_extracts_execution_id() -> None:
+    """Codex PR #101 finding 2: when Alpaca's trade-update message
+    carries an ``execution_id``, the decoder MUST surface it as
+    ``AlpacaTradeUpdate.fill_id`` so :func:`consume` can pass it to
+    :meth:`LiveBrokerJournal.record_fill` for at-least-once dedup."""
+    parsed = decode_trade_update(_fill_msg(execution_id="exec-abc"))
+    assert parsed is not None
+    assert parsed.fill_id == "exec-abc"
+
+
+@pytest.mark.xfail(strict=True, reason="impl pending — Task #12 execution_id parsing")
+def test_decode_trade_update_fill_id_none_when_absent() -> None:
+    """Backward compat: when ``execution_id`` is missing the decoder
+    MUST set ``fill_id=None`` (the journal still inserts audit-only)."""
+    parsed = decode_trade_update(_fill_msg(execution_id=None))
+    assert parsed is not None
+    assert parsed.fill_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason="impl pending — Task #12 execution_id parsing")
+async def test_consume_passes_execution_id_to_journal_record_fill(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """consume() MUST pass ``decoded.fill_id`` through to
+    ``journal.record_fill(fill_id=...)`` so the journal's UNIQUE
+    constraint can suppress duplicate webhook deliveries."""
+
+    path = Path(str(tmp_path)) / "j.sqlite"
+    log = EventLog()
+    with LiveBrokerJournal(path=path) as journal:
+        journal.register_submission(
+            client_order_id="abc123",
+            cycle_id="cycle-X",
+            decision_run_id="decision-Y",
+            order_id="venue-uuid-1",
+            idempotency_key="full-key",
+            symbol="AAPL",
+            side="buy",
+            qty=Decimal("10"),
+        )
+        await consume(
+            _async_iter([_fill_msg(execution_id="exec-1")]),
+            event_log=log,
+            journal=journal,
+        )
+        cur = journal._conn.execute("SELECT fill_id FROM fills")
+        rows = cur.fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == "exec-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason="impl pending — Task #12 execution_id parsing")
+async def test_consume_suppresses_duplicate_fill_emission(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """When the same (client_order_id, execution_id) arrives twice,
+    record_fill returns False on the second call. consume() MUST
+    capture the False and skip ``event_log.append`` so downstream
+    cycle consumers see exactly one BROKER_LIVE_FILLED per fill."""
+
+    path = Path(str(tmp_path)) / "j.sqlite"
+    log = EventLog()
+    with LiveBrokerJournal(path=path) as journal:
+        journal.register_submission(
+            client_order_id="abc123",
+            cycle_id="cycle-X",
+            decision_run_id="decision-Y",
+            order_id="venue-uuid-1",
+            idempotency_key="full-key",
+            symbol="AAPL",
+            side="buy",
+            qty=Decimal("10"),
+        )
+        # Two identical fill messages with the same execution_id.
+        msg1 = _fill_msg(execution_id="exec-1")
+        msg2 = _fill_msg(execution_id="exec-1")
+        await consume(_async_iter([msg1, msg2]), event_log=log, journal=journal)
+        # Journal: one row (UNIQUE collapsed the duplicate).
+        cur = journal._conn.execute("SELECT COUNT(*) FROM fills")
+        assert cur.fetchone()[0] == 1
+        # EventLog: one event (consume MUST skip on record_fill==False).
+        assert len(log.filter_by_kind(CycleEventKind.BROKER_LIVE_FILLED)) == 1
+
+
+@pytest.mark.asyncio
+async def test_consume_emits_both_when_execution_ids_differ(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """Two genuine partial fills with distinct execution_ids MUST
+    each emit BROKER_LIVE_FILLED — dedup keys on (client_order_id,
+    execution_id), not on quantity / price."""
+
+    path = Path(str(tmp_path)) / "j.sqlite"
+    log = EventLog()
+    with LiveBrokerJournal(path=path) as journal:
+        journal.register_submission(
+            client_order_id="abc123",
+            cycle_id="cycle-X",
+            decision_run_id="decision-Y",
+            order_id="venue-uuid-1",
+            idempotency_key="full-key",
+            symbol="AAPL",
+            side="buy",
+            qty=Decimal("10"),
+        )
+        msg1 = _fill_msg(execution_id="exec-1")
+        msg2 = _fill_msg(execution_id="exec-2")
+        await consume(_async_iter([msg1, msg2]), event_log=log, journal=journal)
+        cur = journal._conn.execute("SELECT COUNT(*) FROM fills")
+        assert cur.fetchone()[0] == 2
+        assert len(log.filter_by_kind(CycleEventKind.BROKER_LIVE_FILLED)) == 2
 
 
 @pytest.mark.asyncio
