@@ -397,10 +397,26 @@ class LiveBrokerAlpaca:
         prices: dict[Ticker, Decimal],
     ) -> ExecutionReport:
         """Submit each FILLED entry in ``paper_report`` to Alpaca via
-        :class:`AlpacaRestClient`. Aborts on the first venue rejection
-        (returns REJECTED + emits BROKER_LIVE_REJECTED); on success
-        returns FILLED with placeholder fill prices and emits
-        BROKER_LIVE_SUBMITTED per accepted order.
+        :class:`AlpacaRestClient`.
+
+        Outcomes:
+
+        - **All accepted** → ``ExecutionStatus.SUBMITTED`` with one
+          ``Fill(status=SUBMITTED)`` per target. Fill prices are
+          *anticipated*; actual fills come via ``BROKER_LIVE_FILLED``
+          (websocket — next slice). ``SUBMITTED`` is **not** ``FILLED``
+          — downstream consumers MUST treat ``SUBMITTED`` fills as
+          pending venue confirmation (Codex audit 2026-05-10 finding 2).
+        - **First-order rejection** → ``REJECTED`` with empty fills
+          (no broker state changed; rollback trivial).
+        - **Mid-batch rejection** → best-effort
+          :meth:`AlpacaRestClient.cancel_all_orders` to undo prior
+          submitted orders, then ``REJECTED`` with empty fills (Codex
+          audit 2026-05-10 finding 1: REJECTED's rollback contract MUST
+          hold). If cancel-all fails, the kill-switch auto-engages and
+          ``BROKER_LIVE_KILL_SWITCH(reason="rollback_failed")`` is
+          emitted — the operator MUST investigate venue-side residual
+          orders manually.
 
         ``client_order_id`` is the leading 48 chars of
         :meth:`compute_idempotency_key`'s 64-char digest per ADR-0009;
@@ -409,6 +425,7 @@ class LiveBrokerAlpaca:
         """
         assert self._alpaca_client is not None  # narrowed by caller
         live_fills: list[Fill] = []
+        submitted_count = 0
         for paper_fill in paper_report.fills:
             if paper_fill.status is not FillStatus.FILLED:
                 continue
@@ -429,6 +446,14 @@ class LiveBrokerAlpaca:
                 )
             except AlpacaError as exc:
                 reason = f"Alpaca rejected {paper_fill.ticker} {paper_fill.side.value}: {exc}"
+                # Mid-batch rollback: cancel prior submissions so
+                # ExecutionStatus.REJECTED's rollback contract holds.
+                if submitted_count > 0:
+                    try:
+                        await self._alpaca_client.cancel_all_orders()
+                    except AlpacaError:
+                        self._kill_switch_engaged = True
+                        self._emit_kill_switch(reason="rollback_failed")
                 self._emit_rejected(
                     decision_run_id=action.source_decision_run_id,
                     reason=reason,
@@ -436,7 +461,7 @@ class LiveBrokerAlpaca:
                 return ExecutionReport(
                     source_decision_run_id=action.source_decision_run_id,
                     status=ExecutionStatus.REJECTED,
-                    fills=tuple(live_fills),
+                    fills=(),
                     reason=reason,
                 )
             self._emit_submitted(
@@ -448,26 +473,28 @@ class LiveBrokerAlpaca:
                 qty=order.qty,
                 side=paper_fill.side,
             )
-            # Placeholder fill: actual fill price + qty come from the
-            # websocket trade-update stream (next slice). For now record
-            # the requested qty and the price from the gateway-side
-            # snapshot so downstream consumers see something non-zero.
-            placeholder_price = prices.get(paper_fill.ticker, Decimal(0))
+            submitted_count += 1
+            # Anticipated fill values from the gateway-side snapshot;
+            # FillStatus.SUBMITTED makes the "pending venue fill" state
+            # visible in the typed surface (no longer a typed lie under
+            # FillStatus.FILLED). Real qty + price land on the
+            # BROKER_LIVE_FILLED event when the websocket arrives.
+            anticipated_price = prices.get(paper_fill.ticker, Decimal(0))
             live_fills.append(
                 Fill(
                     ticker=paper_fill.ticker,
                     side=paper_fill.side,
-                    status=FillStatus.FILLED,
+                    status=FillStatus.SUBMITTED,
                     quantity=order.qty,
-                    fill_price_usd=placeholder_price,
-                    notional_usd=order.qty * placeholder_price,
+                    fill_price_usd=anticipated_price,
+                    notional_usd=order.qty * anticipated_price,
                     reason="venue submission accepted; actual fill price "
                     "via BROKER_LIVE_FILLED event (websocket — next slice)",
                 ),
             )
         return ExecutionReport(
             source_decision_run_id=action.source_decision_run_id,
-            status=ExecutionStatus.FILLED,
+            status=ExecutionStatus.SUBMITTED,
             fills=tuple(live_fills),
             reason=None,
         )

@@ -232,14 +232,20 @@ class AlpacaRestClient:
     async def cancel_all_orders(self) -> None:
         """``DELETE /v2/orders`` — cancel every open order. Used by
         :meth:`LiveBrokerAlpaca.kill_switch` per ADR-0009 §"Per-NFR
-        mapping (NFR-LIVE-BROKER-5)". 200 / 204 / 207 (Multi-Status)
-        all succeed; only 5xx raises."""
+        mapping (NFR-LIVE-BROKER-5)" and by the partial-rollback path
+        in :meth:`LiveBrokerAlpaca._submit_to_alpaca`.
+
+        200 / 204 / 207 (Multi-Status) succeed; **any 4xx raises**
+        per Codex audit 2026-05-10 finding 3 — for kill-switch use a
+        401/403/404 means the cancel failed to reach the venue, not
+        success. 5xx also raises.
+        """
         try:
             resp = await self._client.delete(f"{self._base_url}/v2/orders")
         except httpx.HTTPError as exc:
             msg = f"Alpaca REST transport error during cancel-all: {exc}"
             raise AlpacaError(msg) from exc
-        if resp.status_code >= _HTTP_5XX_FLOOR:
+        if resp.status_code >= _HTTP_4XX_FLOOR:
             raise AlpacaError(
                 f"Alpaca REST {resp.status_code}: cancel-all failed",
                 status_code=resp.status_code,
