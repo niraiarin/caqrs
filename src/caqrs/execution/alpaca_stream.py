@@ -87,6 +87,11 @@ class AlpacaTradeUpdate:
     filled_qty: Decimal | None = None
     filled_avg_price: Decimal | None = None
     reason: str | None = None
+    fill_id: str | None = None
+    """Alpaca's ``execution_id`` for FILL / PARTIAL_FILL events,
+    populated when the venue supplies one. Used by
+    :meth:`LiveBrokerJournal.record_fill` to dedup at-least-once
+    webhook deliveries (Codex PR #101 finding 2)."""
 
 
 def decode_trade_update(raw: dict[str, object]) -> AlpacaTradeUpdate | None:  # noqa: PLR0911
@@ -130,6 +135,7 @@ def decode_trade_update(raw: dict[str, object]) -> AlpacaTradeUpdate | None:  # 
         return None
     filled_qty: Decimal | None = None
     filled_avg_price: Decimal | None = None
+    fill_id: str | None = None
     if kind in {TradeUpdateKind.FILL, TradeUpdateKind.PARTIAL_FILL}:
         # Codex audit 2026-05-10 blockers 1 + 2: qty/price are
         # mandatory on fill events. Drop the message if either is
@@ -146,6 +152,13 @@ def decode_trade_update(raw: dict[str, object]) -> AlpacaTradeUpdate | None:  # 
             return None
         if filled_qty <= 0 or filled_avg_price <= 0:
             return None
+        # Codex PR #101 finding 2: surface execution_id when present
+        # so the journal can dedup at-least-once webhook delivery on
+        # (client_order_id, fill_id). Absence stays None (audit-only
+        # insert, no dedup) for back-compat with brokers that omit it.
+        execution_id_raw = data.get("execution_id")
+        if isinstance(execution_id_raw, str) and execution_id_raw:
+            fill_id = execution_id_raw
     reason: str | None = None
     if kind in {TradeUpdateKind.CANCELED, TradeUpdateKind.REJECTED}:
         reason_raw = data.get("reason")
@@ -160,6 +173,7 @@ def decode_trade_update(raw: dict[str, object]) -> AlpacaTradeUpdate | None:  # 
         filled_qty=filled_qty,
         filled_avg_price=filled_avg_price,
         reason=reason,
+        fill_id=fill_id,
     )
 
 
@@ -233,19 +247,20 @@ async def consume(
             assert update.filled_avg_price is not None
             # Persist BEFORE emitting the event (Codex PR #100
             # consistency note): journal state is at-least-as-fresh as
-            # the in-memory event log.
+            # the in-memory event log. When the journal returns False
+            # (duplicate (client_order_id, fill_id) suppressed), skip
+            # the event_log.append so downstream consumers see exactly
+            # one BROKER_LIVE_FILLED per fill — Codex PR #101 finding 2.
             if journal is not None:
-                journal.record_fill(
+                inserted = journal.record_fill(
                     client_order_id=update.client_order_id,
                     qty=update.filled_qty,
                     fill_price_usd=update.filled_avg_price,
                     is_partial=update.kind is TradeUpdateKind.PARTIAL_FILL,
-                    # fill_id parsing deferred — Alpaca's execution_id
-                    # field will land in a follow-up. Until then the
-                    # journal stores fills audit-only (no dedup) per
-                    # PR #100's docstring contract.
-                    fill_id=None,
+                    fill_id=update.fill_id,
                 )
+                if not inserted:
+                    continue
             event_log.append(
                 broker_live_filled_event(
                     cycle_id=cycle_id,

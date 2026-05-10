@@ -317,7 +317,6 @@ async def test_consume_without_journal_and_without_resolvers_raises() -> None:
 # === execution_id dedup (PR #101 Codex finding 2 follow-through) ===
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #12 execution_id parsing")
 def test_decode_trade_update_extracts_execution_id() -> None:
     """Codex PR #101 finding 2: when Alpaca's trade-update message
     carries an ``execution_id``, the decoder MUST surface it as
@@ -328,7 +327,6 @@ def test_decode_trade_update_extracts_execution_id() -> None:
     assert parsed.fill_id == "exec-abc"
 
 
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #12 execution_id parsing")
 def test_decode_trade_update_fill_id_none_when_absent() -> None:
     """Backward compat: when ``execution_id`` is missing the decoder
     MUST set ``fill_id=None`` (the journal still inserts audit-only)."""
@@ -338,7 +336,6 @@ def test_decode_trade_update_fill_id_none_when_absent() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #12 execution_id parsing")
 async def test_consume_passes_execution_id_to_journal_record_fill(
     tmp_path: pytest.TempPathFactory,
 ) -> None:
@@ -371,7 +368,6 @@ async def test_consume_passes_execution_id_to_journal_record_fill(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="impl pending — Task #12 execution_id parsing")
 async def test_consume_suppresses_duplicate_fill_emission(
     tmp_path: pytest.TempPathFactory,
 ) -> None:
