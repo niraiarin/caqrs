@@ -127,7 +127,7 @@ ignore = [
 # be linear top-to-bottom flows: env validation, setup, submission,
 # teardown. Splitting into PLR0911/0915-compliant helpers obscures
 # the operator-readable narrative without buying type safety.
-"scripts/**/*.py" = ["PLR0911", "PLR0915"]
+"scripts/**/*.py" = ["PLR0911", "PLR0912", "PLR0915"]
 
 [tool.ruff.format]
 quote-style = "double"
