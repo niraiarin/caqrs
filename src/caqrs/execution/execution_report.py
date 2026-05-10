@@ -24,24 +24,42 @@ from caqrs.schemas.decision import Side
 
 
 class FillStatus(StrEnum):
-    """Per-target fill outcome."""
+    """Per-target fill outcome.
+
+    ``FILLED``: synchronous broker (PaperBroker) — qty/price are the
+    executed amounts. ``REJECTED``: the broker refused this leg.
+    ``SUBMITTED``: live broker only — Alpaca accepted the order but
+    actual fill price + qty come later via the trade-update websocket
+    (``BROKER_LIVE_FILLED``). Numeric fields on a SUBMITTED Fill are
+    *anticipated* (gateway-side snapshot prices), not executed.
+    """
 
     FILLED = "filled"
     REJECTED = "rejected"
+    SUBMITTED = "submitted"
 
 
 class ExecutionStatus(StrEnum):
     """Top-level execution outcome.
 
-    All-or-nothing: ``FILLED`` means every target filled, ``REJECTED``
-    means at least one couldn't fill (and broker state was rolled back
-    to before the call), ``SKIPPED`` means the action wasn't ADOPT so
-    no broker work was attempted.
+    Synchronous brokers (PaperBroker) are all-or-nothing: ``FILLED``
+    means every target filled, ``REJECTED`` means at least one couldn't
+    fill AND broker state was rolled back to before the call.
+
+    Live brokers add ``SUBMITTED``: every requested order was accepted
+    by the venue but actual fills are pending the trade-update stream.
+    On mid-batch venue rejection the broker MUST attempt to cancel the
+    already-submitted orders and return ``REJECTED`` with empty fills
+    (per Codex audit 2026-05-10 finding 1).
+
+    ``SKIPPED`` means the action wasn't ADOPT so no broker work was
+    attempted at all.
     """
 
     FILLED = "filled"
     SKIPPED = "skipped"
     REJECTED = "rejected"
+    SUBMITTED = "submitted"
 
 
 class Fill(StrictBaseModel):

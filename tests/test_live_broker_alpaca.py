@@ -26,15 +26,19 @@ attempts a venue connection.
 
 from __future__ import annotations
 
+import asyncio
 import io
 from decimal import Decimal
 
+import httpx
 import pytest
+import respx
 
-from caqrs.execution.execution_report import ExecutionStatus
+from caqrs.execution.alpaca_rest import AlpacaError, AlpacaRestClient
+from caqrs.execution.execution_report import ExecutionStatus, FillStatus
 from caqrs.execution.live_broker_alpaca import LiveBrokerAlpaca, _main
 from caqrs.execution.paper_broker import PaperBroker
-from caqrs.orchestrator import EventLog, new_cycle_id
+from caqrs.orchestrator import CycleEventKind, EventLog, new_cycle_id
 from caqrs.policy.gateway import FeasibleAction
 from caqrs.schemas.common import new_run_id
 from caqrs.schemas.decision import DecisionAction, Side, TargetPosition
@@ -518,3 +522,272 @@ def test_enable_live_orders_does_not_strip_env_value(
         cli_confirmation_token=" secret ",
     )
     assert broker.enable_live_orders is True
+
+
+# === Alpaca REST submission integration =================================
+# Live wire-in tests: LiveBrokerAlpaca.execute() submits each paper-pre-flight
+# fill to Alpaca via AlpacaRestClient, emits BROKER_LIVE_SUBMITTED on success
+# and BROKER_LIVE_REJECTED on venue rejection.
+
+
+@pytest.mark.asyncio
+async def test_alpaca_submission_emits_broker_live_submitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When live orders are enabled and paper pre-flight FILLs, the
+    LiveBroker MUST submit to Alpaca, emit one BROKER_LIVE_SUBMITTED
+    event per accepted order, and return ExecutionStatus.SUBMITTED
+    with anticipated-price fills (Codex audit 2026-05-10 finding 2:
+    SUBMITTED is not FILLED until websocket trade-update lands)."""
+    log = EventLog()
+    paper = PaperBroker(initial_capital_usd=Decimal("100000"))
+    base_url = "https://paper-api.alpaca.markets"
+    with respx.mock(base_url=base_url) as router:
+        router.post("/v2/orders").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "order-uuid-1",
+                    "client_order_id": "abc",
+                    "symbol": "AAPL",
+                    "qty": "55.55555556",
+                    "side": "buy",
+                    "status": "accepted",
+                },
+            ),
+        )
+        async with AlpacaRestClient(api_key="k", api_secret="s") as alpaca:
+            broker = LiveBrokerAlpaca(
+                paper_broker=paper,
+                live_broker_daily_loss_cap_usd=Decimal("1000"),
+                alpaca_client=alpaca,
+                _force_enable_live_orders_for_test=True,
+            )
+            broker.attach_cycle_context(cycle_id=new_cycle_id(), event_log=log)
+
+            action = FeasibleAction(
+                action=DecisionAction.ADOPT,
+                targets=(TargetPosition(ticker="AAPL", side=Side.BUY, weight=Decimal("0.5")),),
+                violations=(),
+                source_decision_run_id=new_run_id(),
+            )
+            report = await broker.execute(
+                action=action,
+                prices={"AAPL": Decimal("180")},
+            )
+    assert report.status is ExecutionStatus.SUBMITTED
+    assert len(report.fills) == 1
+    assert report.fills[0].status is FillStatus.SUBMITTED
+    submitted = log.filter_by_kind(CycleEventKind.BROKER_LIVE_SUBMITTED)
+    assert len(submitted) == 1
+    payload = submitted[0].payload
+    assert payload["order_id"] == "order-uuid-1"
+    assert payload["symbol"] == "AAPL"
+    assert payload["side"] == "buy"
+    assert len(payload["idempotency_key"]) == 64  # full sha256 hex
+    assert len(payload["client_order_id"]) <= 48  # Alpaca-truncated form
+
+
+@pytest.mark.asyncio
+async def test_alpaca_submission_rejection_emits_broker_live_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When Alpaca returns 4xx, LiveBroker MUST emit BROKER_LIVE_REJECTED
+    with the venue's stated reason and return ExecutionStatus.REJECTED."""
+    log = EventLog()
+    paper = PaperBroker(initial_capital_usd=Decimal("100000"))
+    base_url = "https://paper-api.alpaca.markets"
+    with respx.mock(base_url=base_url) as router:
+        router.post("/v2/orders").mock(
+            return_value=httpx.Response(
+                422,
+                json={"code": 40110000, "message": "insufficient buying power"},
+            ),
+        )
+        async with AlpacaRestClient(api_key="k", api_secret="s") as alpaca:
+            broker = LiveBrokerAlpaca(
+                paper_broker=paper,
+                live_broker_daily_loss_cap_usd=Decimal("1000"),
+                alpaca_client=alpaca,
+                _force_enable_live_orders_for_test=True,
+            )
+            broker.attach_cycle_context(cycle_id=new_cycle_id(), event_log=log)
+            action = FeasibleAction(
+                action=DecisionAction.ADOPT,
+                targets=(TargetPosition(ticker="AAPL", side=Side.BUY, weight=Decimal("0.5")),),
+                violations=(),
+                source_decision_run_id=new_run_id(),
+            )
+            report = await broker.execute(
+                action=action,
+                prices={"AAPL": Decimal("180")},
+            )
+    assert report.status is ExecutionStatus.REJECTED
+    rejected = log.filter_by_kind(CycleEventKind.BROKER_LIVE_REJECTED)
+    assert len(rejected) == 1
+    assert "Alpaca rejected" in rejected[0].payload["reason"]
+
+
+def test_live_broker_without_alpaca_client_raises_when_submission_path_reached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Constructing LiveBrokerAlpaca without alpaca_client AND reaching
+    the submission path (kill_switch=False, enable_live_orders=True,
+    paper FILLED) MUST raise — accidentally elevating to live without
+    a venue client is a configuration error, not a silent no-op."""
+    paper = PaperBroker(initial_capital_usd=Decimal("100000"))
+    broker = LiveBrokerAlpaca(
+        paper_broker=paper,
+        live_broker_daily_loss_cap_usd=Decimal("1000"),
+        _force_enable_live_orders_for_test=True,
+    )
+    action = FeasibleAction(
+        action=DecisionAction.ADOPT,
+        targets=(TargetPosition(ticker="AAPL", side=Side.BUY, weight=Decimal("0.5")),),
+        violations=(),
+        source_decision_run_id=new_run_id(),
+    )
+    with pytest.raises(RuntimeError, match="without alpaca_client"):
+        asyncio.run(broker.execute(action=action, prices={"AAPL": Decimal("180")}))
+
+
+# === Codex audit 2026-05-10 regressions ============================
+
+
+@pytest.mark.asyncio
+async def test_alpaca_mid_batch_rejection_rolls_back_via_cancel_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the second submission fails after the first succeeded,
+    LiveBrokerAlpaca MUST issue cancel_all_orders() to undo the prior
+    submission, then return REJECTED with EMPTY fills (Codex audit
+    2026-05-10 finding 1: REJECTED's "rollback to before the call"
+    contract MUST hold)."""
+    log = EventLog()
+    paper = PaperBroker(initial_capital_usd=Decimal("100000"))
+    base_url = "https://paper-api.alpaca.markets"
+    cancel_all_called = {"count": 0}
+
+    def _cancel_handler(_request: httpx.Request) -> httpx.Response:
+        cancel_all_called["count"] += 1
+        return httpx.Response(207, json=[])
+
+    submit_responses = [
+        httpx.Response(
+            200,
+            json={
+                "id": "uuid-1",
+                "client_order_id": "k1",
+                "symbol": "AAPL",
+                "qty": "10",
+                "side": "buy",
+                "status": "accepted",
+            },
+        ),
+        httpx.Response(422, json={"message": "venue-side rejection"}),
+    ]
+
+    with respx.mock(base_url=base_url) as router:
+        router.post("/v2/orders").mock(side_effect=submit_responses)
+        router.delete("/v2/orders").mock(side_effect=_cancel_handler)
+        async with AlpacaRestClient(api_key="k", api_secret="s") as alpaca:
+            broker = LiveBrokerAlpaca(
+                paper_broker=paper,
+                live_broker_daily_loss_cap_usd=Decimal("100000"),
+                alpaca_client=alpaca,
+                _force_enable_live_orders_for_test=True,
+            )
+            broker.attach_cycle_context(cycle_id=new_cycle_id(), event_log=log)
+            action = FeasibleAction(
+                action=DecisionAction.ADOPT,
+                targets=(
+                    TargetPosition(ticker="AAPL", side=Side.BUY, weight=Decimal("0.4")),
+                    TargetPosition(ticker="MSFT", side=Side.BUY, weight=Decimal("0.4")),
+                ),
+                violations=(),
+                source_decision_run_id=new_run_id(),
+            )
+            report = await broker.execute(
+                action=action,
+                prices={"AAPL": Decimal("180"), "MSFT": Decimal("400")},
+            )
+    assert report.status is ExecutionStatus.REJECTED
+    assert report.fills == ()  # rollback contract — no fills survive
+    assert cancel_all_called["count"] == 1
+    rejected = log.filter_by_kind(CycleEventKind.BROKER_LIVE_REJECTED)
+    assert len(rejected) == 1
+
+
+@pytest.mark.asyncio
+async def test_alpaca_mid_batch_rollback_failure_engages_kill_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If cancel_all_orders itself fails during mid-batch rollback,
+    LiveBroker MUST auto-engage the kill switch and emit
+    BROKER_LIVE_KILL_SWITCH(reason='rollback_failed') so the operator
+    investigates venue-side residual orders manually."""
+    log = EventLog()
+    paper = PaperBroker(initial_capital_usd=Decimal("100000"))
+    base_url = "https://paper-api.alpaca.markets"
+
+    submit_responses = [
+        httpx.Response(
+            200,
+            json={
+                "id": "uuid-1",
+                "client_order_id": "k1",
+                "symbol": "AAPL",
+                "qty": "10",
+                "side": "buy",
+                "status": "accepted",
+            },
+        ),
+        httpx.Response(422, json={"message": "venue-side rejection"}),
+    ]
+    with respx.mock(base_url=base_url) as router:
+        router.post("/v2/orders").mock(side_effect=submit_responses)
+        router.delete("/v2/orders").mock(
+            return_value=httpx.Response(503, text="venue down"),
+        )
+        async with AlpacaRestClient(api_key="k", api_secret="s") as alpaca:
+            broker = LiveBrokerAlpaca(
+                paper_broker=paper,
+                live_broker_daily_loss_cap_usd=Decimal("100000"),
+                alpaca_client=alpaca,
+                _force_enable_live_orders_for_test=True,
+            )
+            broker.attach_cycle_context(cycle_id=new_cycle_id(), event_log=log)
+            action = FeasibleAction(
+                action=DecisionAction.ADOPT,
+                targets=(
+                    TargetPosition(ticker="AAPL", side=Side.BUY, weight=Decimal("0.4")),
+                    TargetPosition(ticker="MSFT", side=Side.BUY, weight=Decimal("0.4")),
+                ),
+                violations=(),
+                source_decision_run_id=new_run_id(),
+            )
+            report = await broker.execute(
+                action=action,
+                prices={"AAPL": Decimal("180"), "MSFT": Decimal("400")},
+            )
+    assert report.status is ExecutionStatus.REJECTED
+    assert broker.kill_switch_engaged is True
+    kill_events = log.filter_by_kind(CycleEventKind.BROKER_LIVE_KILL_SWITCH)
+    assert len(kill_events) == 1
+    assert kill_events[0].payload["reason"] == "rollback_failed"
+
+
+@pytest.mark.asyncio
+async def test_alpaca_cancel_all_raises_on_4xx() -> None:
+    """Codex audit finding 3: cancel_all_orders MUST raise on any 4xx
+    (401/403/404 mean the kill-switch failed to reach the venue, NOT
+    success). Previously raised only on 5xx."""
+    base_url = "https://paper-api.alpaca.markets"
+    with respx.mock(base_url=base_url) as router:
+        router.delete("/v2/orders").mock(
+            return_value=httpx.Response(401, json={"message": "Unauthorized"}),
+        )
+        async with AlpacaRestClient(api_key="k", api_secret="s") as client:
+            with pytest.raises(AlpacaError) as excinfo:
+                await client.cancel_all_orders()
+            assert excinfo.value.status_code == 401

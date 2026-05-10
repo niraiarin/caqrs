@@ -282,6 +282,39 @@ def identifier_resolved_event(
     )
 
 
+def broker_live_submitted_event(
+    *,
+    cycle_id: str,
+    decision_run_id: str,
+    order_id: str,
+    client_order_id: str,
+    idempotency_key: str,
+    symbol: str,
+    qty: str,
+    side: str,
+) -> CycleEvent:
+    """ADR-0008 NFR-LIVE-BROKER-7: live broker emits this on every
+    successful Alpaca order submission. ``order_id`` is the
+    venue-assigned UUID; ``idempotency_key`` is the full 64-char
+    sha256 digest (per ADR-0008 §NFR-LIVE-BROKER-4) so replay
+    disambiguation is recoverable from the event log alone, even
+    after the venue's ``client_order_id`` (48-char truncation per
+    ADR-0009) has been forgotten."""
+    return _build_event(
+        cycle_id=cycle_id,
+        kind=CycleEventKind.BROKER_LIVE_SUBMITTED,
+        payload={
+            "decision_run_id": decision_run_id,
+            "order_id": order_id,
+            "client_order_id": client_order_id,
+            "idempotency_key": idempotency_key,
+            "symbol": symbol,
+            "qty": qty,
+            "side": side,
+        },
+    )
+
+
 def broker_live_rejected_event(
     *,
     cycle_id: str,
