@@ -32,7 +32,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from decimal import Decimal
+from typing import TextIO
 
 from caqrs.execution.execution_report import (
     ExecutionReport,
@@ -139,25 +141,61 @@ class LiveBrokerAlpaca:
     def enable_live_orders_after_human_approval(
         self,
         *,
-        env_token: str,
+        env_token: str = "LIVE_BROKER_ENABLE_LIVE_ORDERS",
         cli_confirmation_token: str,
     ) -> None:
         """Flip :attr:`enable_live_orders` to ``True`` after the
         ADR-0008 §NFR-LIVE-BROKER-1 two-step approval.
 
-        Stub in this PR: real env-var + CLI-confirmation wiring lands
-        with the Alpaca SDK integration in the follow-up. Until then,
-        production callers MUST NOT have a path to True; the
-        :class:`NotImplementedError` raised here is the binding gate.
+        Verification (all three must hold):
+
+        1. ``env_token`` starts with the ``LIVE_BROKER_`` prefix —
+           prevents a confused-deputy attack where any known process
+           env var (``PATH``, etc.) gets repurposed as the gate
+           (Codex audit 2026-05-09 finding 1).
+        2. ``os.environ[env_token]`` is set to a non-empty string.
+        3. ``cli_confirmation_token`` is **byte-equal** to that env
+           value — no whitespace stripping (Codex audit 2026-05-09
+           finding 2). ``" secret "`` is not the same secret as
+           ``"secret"``; the gate enforces exact equality.
+
+        The two-factor invariant: setting the env var alone is not
+        enough (the CLI confirmation has not been performed); running
+        the CLI alone is not enough (the env var must be set
+        independently). The default ``env_token`` is the canonical
+        name from ADR-0008 §NFR-LIVE-BROKER-1.
+
+        Trust model: this is an **operator-friction gate**, not a
+        security primitive against a compromised shell. Anyone who can
+        read the process env and execute Python in this environment
+        can satisfy the gate. The intent is preventing **accidental**
+        live enablement (e.g. forgetting `--paper`); per ADR-0008 the
+        kill switch + per-broker daily loss cap are the
+        defense-in-depth layers against malicious / compromised paths.
         """
-        msg = (
-            "real env-var + one-time CLI confirmation workflow "
-            "deferred to the Alpaca SDK integration follow-up; "
-            "the only path to enable_live_orders=True today is the "
-            "_force_enable_live_orders_for_test ctor flag, which is "
-            "test-only by convention"
-        )
-        raise NotImplementedError(msg)
+        if not env_token.startswith("LIVE_BROKER_"):
+            msg = (
+                f"env_token must start with 'LIVE_BROKER_' (got {env_token!r}); "
+                "the live-broker approval gate is bound to the broker's own "
+                "credential surface to prevent confused-deputy reuse of "
+                "unrelated env vars"
+            )
+            raise RuntimeError(msg)
+        env_value = os.environ.get(env_token, "")
+        if not env_value:
+            msg = (
+                f"{env_token} env var must be set to a non-empty value before "
+                "calling enable_live_orders_after_human_approval; run "
+                "`python -m caqrs.execution.live_broker_alpaca confirm-live` first"
+            )
+            raise RuntimeError(msg)
+        if cli_confirmation_token != env_value:
+            msg = (
+                "cli_confirmation_token does not match the env var; "
+                "rerun the confirm-live CLI to refresh the confirmation"
+            )
+            raise RuntimeError(msg)
+        self.enable_live_orders = True
 
     # --- NFR-LIVE-BROKER-4: idempotency key ---------------------------------
 
@@ -363,3 +401,88 @@ class LiveBrokerAlpaca:
                 reason=reason,
             ),
         )
+
+
+# =====================================================================
+# CLI entrypoint — `python -m caqrs.execution.live_broker_alpaca confirm-live`
+# =====================================================================
+#
+# ADR-0008 §NFR-LIVE-BROKER-1 mandates "an env var that requires manual
+# setting plus a one-time CLI confirmation". This module's CLI dispatch
+# is the second half of that pair: the operator sets
+# LIVE_BROKER_ENABLE_LIVE_ORDERS to a secret of their choosing
+# (the env var SHOULD be encrypted at rest via dotenvx), then runs
+# `python -m caqrs.execution.live_broker_alpaca confirm-live` and
+# re-types the same secret. Two-factor in spirit: persistent env var
+# config + interactive re-confirm.
+#
+# `_main(argv, stdin, stdout, stderr)` is parameterised so unit tests
+# can drive it without monkey-patching sys streams. The
+# `if __name__ == "__main__":` guard at the bottom invokes it with the
+# real sys streams.
+
+
+_CONFIRM_LIVE_ENV_VAR = "LIVE_BROKER_ENABLE_LIVE_ORDERS"
+
+
+def _main(
+    argv: list[str],
+    *,
+    stdin: TextIO,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> int:
+    """Dispatch the live-broker CLI subcommand. Returns the exit code.
+
+    Currently the only supported subcommand is ``confirm-live``.
+    """
+    if argv != ["confirm-live"]:
+        print(
+            "usage: python -m caqrs.execution.live_broker_alpaca confirm-live",
+            file=stderr,
+        )
+        return 2
+    secret = os.environ.get(_CONFIRM_LIVE_ENV_VAR, "")
+    if not secret:
+        print(
+            f"{_CONFIRM_LIVE_ENV_VAR} is not set; aborting. "
+            "Set it (e.g. via dotenvx) to a secret of your choosing, "
+            "then re-run this command.",
+            file=stderr,
+        )
+        return 1
+    print(
+        "Live trading is about to be authorised. This is a step toward "
+        "real-money orders being submitted on your behalf.",
+        file=stdout,
+    )
+    print(
+        f"Confirm by re-typing the value of ${_CONFIRM_LIVE_ENV_VAR} exactly:",
+        file=stdout,
+        flush=True,
+    )
+    # Strip ONLY the trailing newline that readline() appends; do NOT
+    # rstrip() — internal whitespace must round-trip exactly per the
+    # byte-equality contract (Codex audit finding 2).
+    raw = stdin.readline()
+    confirmation = raw[:-1] if raw.endswith("\n") else raw
+    if confirmation != secret:
+        print(
+            "confirmation did not match the env var; aborting. No state was changed.",
+            file=stderr,
+        )
+        return 1
+    print(
+        "OK. You may now call "
+        f"enable_live_orders_after_human_approval(env_token={_CONFIRM_LIVE_ENV_VAR!r}, "
+        "cli_confirmation_token=<the same secret you just typed>) "
+        "on your LiveBrokerAlpaca instance.",
+        file=stdout,
+    )
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover — exercised via _main tests
+    import sys as _sys
+
+    _sys.exit(_main(_sys.argv[1:], stdin=_sys.stdin, stdout=_sys.stdout, stderr=_sys.stderr))
