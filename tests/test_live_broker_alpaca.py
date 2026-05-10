@@ -236,6 +236,35 @@ async def test_execute_skips_when_paper_pre_flight_rejects() -> None:
     assert "paper pre-flight" in (report.reason or "").lower()
 
 
+@pytest.mark.asyncio
+async def test_paper_pre_flight_rejection_emits_broker_live_rejected() -> None:
+    """NFR-LIVE-BROKER-3 / -7 event-half: when paper pre-flight returns
+    non-FILLED, the live broker MUST emit exactly one
+    ``BROKER_LIVE_REJECTED`` whose reason names the paper-pre-flight
+    failure, and MUST NOT emit ``BROKER_EXECUTED`` (paper-only).
+    Codex PR #104 review found that the SKIPPED-status assertion
+    above was insufficient evidence for the threshold's "AND emits
+    BROKER_LIVE_REJECTED" half — this test pins it."""
+    from caqrs.orchestrator import CycleEventKind  # noqa: PLC0415 — local-only
+
+    log = EventLog()
+    broker = _make_broker(enable_live_orders=True, event_log=log)
+    action = FeasibleAction(
+        action=DecisionAction.ADOPT,
+        targets=(TargetPosition(ticker="AAPL", side=Side.BUY, weight=Decimal("0.5")),),
+        violations=(),
+        source_decision_run_id=new_run_id(),
+    )
+    report = await broker.execute(action=action, prices={})
+    assert report.status is ExecutionStatus.SKIPPED
+
+    rejected = log.filter_by_kind(CycleEventKind.BROKER_LIVE_REJECTED)
+    assert len(rejected) == 1
+    assert "paper pre-flight" in rejected[0].payload["reason"].lower()
+
+    assert log.filter_by_kind(CycleEventKind.BROKER_EXECUTED) == ()
+
+
 # --- T-LBA-8: cap breach engages kill-switch -----------------------------
 
 
