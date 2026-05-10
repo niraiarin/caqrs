@@ -42,7 +42,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 
 from caqrs.orchestrator.event_log import EventLog
@@ -85,7 +85,7 @@ class AlpacaTradeUpdate:
     reason: str | None = None
 
 
-def decode_trade_update(raw: dict[str, object]) -> AlpacaTradeUpdate | None:
+def decode_trade_update(raw: dict[str, object]) -> AlpacaTradeUpdate | None:  # noqa: PLR0911
     """Parse one raw trade-update message into an
     :class:`AlpacaTradeUpdate`, or return ``None`` if the message is
     not one of the four taxonomy-mapped events.
@@ -127,12 +127,21 @@ def decode_trade_update(raw: dict[str, object]) -> AlpacaTradeUpdate | None:
     filled_qty: Decimal | None = None
     filled_avg_price: Decimal | None = None
     if kind in {TradeUpdateKind.FILL, TradeUpdateKind.PARTIAL_FILL}:
+        # Codex audit 2026-05-10 blockers 1 + 2: qty/price are
+        # mandatory on fill events. Drop the message if either is
+        # missing, unparseable, or non-positive — otherwise we'd
+        # emit "0" fills and corrupt downstream position/PnL state.
         qty_raw = data.get("qty")
         price_raw = data.get("price")
-        if qty_raw is not None:
+        if qty_raw is None or price_raw is None:
+            return None
+        try:
             filled_qty = Decimal(str(qty_raw))
-        if price_raw is not None:
             filled_avg_price = Decimal(str(price_raw))
+        except (InvalidOperation, ValueError):
+            return None
+        if filled_qty <= 0 or filled_avg_price <= 0:
+            return None
     reason: str | None = None
     if kind in {TradeUpdateKind.CANCELED, TradeUpdateKind.REJECTED}:
         reason_raw = data.get("reason")
@@ -173,14 +182,29 @@ async def consume(
     reconnection.
     """
     async for raw in messages:
-        update = decode_trade_update(raw)
+        try:
+            update = decode_trade_update(raw)
+        except Exception:
+            # Per Codex audit 2026-05-10 blocker 1: a single malformed
+            # message MUST NOT tear down the stream task. The decoder
+            # is defensive (returns None on most malformed input), but
+            # belt-and-suspenders catches let the loop survive any
+            # un-anticipated parse failure. Errors here are rare and
+            # log-worthy at the operator side; the cycle log itself
+            # stays clean.
+            continue
         if update is None:
-            continue  # silently drop unrelated events
+            continue  # silently drop unrelated / malformed events
         cycle_id = cycle_id_resolver(update.client_order_id)
         decision_run_id = decision_run_id_resolver(update.client_order_id)
         if cycle_id is None or decision_run_id is None:
             continue  # the broker didn't submit this in our process
         if update.kind in {TradeUpdateKind.FILL, TradeUpdateKind.PARTIAL_FILL}:
+            # Decoder guarantees qty + price are non-None and positive
+            # for FILL / PARTIAL_FILL (Codex audit blockers 1 + 2);
+            # the assert is for mypy narrowing, not runtime defence.
+            assert update.filled_qty is not None
+            assert update.filled_avg_price is not None
             event_log.append(
                 broker_live_filled_event(
                     cycle_id=cycle_id,
@@ -189,8 +213,8 @@ async def consume(
                     client_order_id=update.client_order_id,
                     symbol=update.symbol,
                     side=update.side,
-                    filled_qty=str(update.filled_qty or Decimal(0)),
-                    filled_avg_price_usd=str(update.filled_avg_price or Decimal(0)),
+                    filled_qty=str(update.filled_qty),
+                    filled_avg_price_usd=str(update.filled_avg_price),
                     is_partial=update.kind is TradeUpdateKind.PARTIAL_FILL,
                 ),
             )

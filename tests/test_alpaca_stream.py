@@ -210,3 +210,53 @@ def test_alpaca_trade_update_dataclass_is_frozen() -> None:
     )
     with pytest.raises(AttributeError):
         update.symbol = "MSFT"  # type: ignore[misc]
+
+
+# === Codex audit 2026-05-10 regressions =================================
+
+
+def test_decode_trade_update_returns_none_on_malformed_qty() -> None:
+    """Codex audit blocker 1: a malformed numeric field MUST NOT raise
+    out of decode_trade_update — the stream loop relies on returning
+    None to keep going."""
+    msg = _fill_msg()
+    msg["data"]["qty"] = "not-a-number"  # type: ignore[index]
+    assert decode_trade_update(msg) is None
+
+
+def test_decode_trade_update_returns_none_when_qty_missing_on_fill() -> None:
+    """Codex audit blocker 2: a fill message missing qty MUST decode
+    to None rather than emitting a "0" fill that corrupts downstream
+    position/PnL accounting."""
+    msg = _fill_msg()
+    del msg["data"]["qty"]  # type: ignore[attr-defined]
+    assert decode_trade_update(msg) is None
+
+
+def test_decode_trade_update_returns_none_when_qty_non_positive() -> None:
+    """A zero or negative qty is not a valid fill."""
+    msg = _fill_msg()
+    msg["data"]["qty"] = "0"  # type: ignore[index]
+    assert decode_trade_update(msg) is None
+    msg["data"]["qty"] = "-1"  # type: ignore[index]
+    assert decode_trade_update(msg) is None
+
+
+@pytest.mark.asyncio
+async def test_consume_continues_past_malformed_message() -> None:
+    """Codex audit blocker 1: one malformed message in a batch MUST NOT
+    stop later valid fills from being consumed and emitted."""
+    log = EventLog()
+    bad = _fill_msg()
+    bad["data"]["qty"] = "not-a-number"  # type: ignore[index]
+    good = _fill_msg()
+    good["data"]["order"]["client_order_id"] = "good-id"  # type: ignore[index]
+    await consume(
+        _async_iter([bad, good]),
+        event_log=log,
+        cycle_id_resolver=lambda _: "cycle-X",
+        decision_run_id_resolver=lambda _: "decision-Y",
+    )
+    filled = log.filter_by_kind(CycleEventKind.BROKER_LIVE_FILLED)
+    assert len(filled) == 1
+    assert filled[0].payload["client_order_id"] == "good-id"
