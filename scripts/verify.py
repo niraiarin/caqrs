@@ -216,7 +216,7 @@ def _emit_section(title: str, lines: Iterable[str]) -> None:
         print(f"  {line}")
 
 
-def main() -> int:  # noqa: PLR0912 — sequential trigger reporting; refactoring would obscure
+def main() -> int:
     parser = argparse.ArgumentParser(description="Pre-merge verification checklist")
     parser.add_argument(
         "--pr-number",
